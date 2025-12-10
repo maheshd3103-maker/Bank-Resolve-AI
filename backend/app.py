@@ -629,82 +629,62 @@ def transfer_money():
         if not sender_account:
             return jsonify({'success': False, 'message': 'Sender account not found'})
         
+        if float(sender_account['balance']) < amount:
+            return jsonify({'success': False, 'message': 'Insufficient balance'})
+        
         # Generate transaction ID
         import random
         transaction_id = f"TXN{random.randint(100000, 999999)}"
         
-        # Step 1: Create temporary transaction with PROCESSING status
-        cursor.execute(
-            '''INSERT INTO transactions (account_id, transaction_type, amount, balance_after,
-               transaction_id, receiver_account, description, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())''',
-            (sender_account['id'], 'transfer', amount, sender_account['balance'], 
-             transaction_id, receiver_account, f'{purpose} to {receiver_name} - {receiver_bank}')
-        )
+        # Deduct amount from sender
+        new_balance = float(sender_account['balance']) - amount
+        cursor.execute('UPDATE accounts SET balance = %s WHERE user_id = %s', (new_balance, user_id))
         
-        # Step 2: Simulate NPCI/Bank Response (30% failure rate for demo)
-        transaction_result = random.choices(
-            ['SUCCESS', 'FAILED', 'PENDING'], 
-            weights=[70, 25, 5]
-        )[0]
+        # Simulate transaction processing with failure scenarios
+        import time
+        time.sleep(2)  # Simulate processing delay
         
-        error_mapping = {
-            'U17': {'reason': 'Receiver bank down', 'action': 'Auto-refund after 48 hrs', 'auto_resolve': True},
-            'N05': {'reason': 'Network timeout', 'action': 'Auto requery + refund', 'auto_resolve': True},
-            'R01': {'reason': 'Payment Switch declined', 'action': 'Manual review required', 'auto_resolve': False},
-            'B03': {'reason': 'Beneficiary account mismatch', 'action': 'User correction needed', 'auto_resolve': False},
-            'F29': {'reason': 'Fraud/Rule check failed', 'action': 'Escalate to compliance', 'auto_resolve': False},
-            'D52': {'reason': 'Insufficient sender balance', 'action': 'Add funds and retry', 'auto_resolve': True}
-        }
-        
-        if transaction_result == 'SUCCESS':
-            # Deduct amount and update transaction
-            new_balance = sender_account['balance'] - amount
-            cursor.execute('UPDATE accounts SET balance = %s WHERE user_id = %s', (new_balance, user_id))
+        # 30% chance of "Payment debited but not credited" scenario
+        if random.random() < 0.3:
+            # Failed transaction - money debited but not credited
             cursor.execute(
-                'UPDATE transactions SET balance_after = %s WHERE transaction_id = %s',
-                (new_balance, transaction_id)
+                '''INSERT INTO transactions (account_id, transaction_type, amount, balance_after,
+                   transaction_id, receiver_account, description, error_code, failure_reason, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())''',
+                (sender_account['id'], 'transfer', amount, new_balance, 
+                 transaction_id, receiver_account, f'{purpose} to {receiver_name} - {receiver_bank}',
+                 'N06', 'Payment debited but not credited to recipient')
             )
             
             conn.commit()
+            
+            return jsonify({
+                'success': False,
+                'status': 'FAILED',
+                'message': 'Transaction failed: Payment debited but not credited to recipient',
+                'transaction_id': transaction_id,
+                'error_code': 'N06',
+                'new_balance': new_balance,
+                'can_raise_complaint': True
+            })
+        else:
+            # Successful transaction
+            cursor.execute(
+                '''INSERT INTO transactions (account_id, transaction_type, amount, balance_after,
+                   transaction_id, receiver_account, description, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())''',
+                (sender_account['id'], 'transfer', amount, new_balance, 
+                 transaction_id, receiver_account, f'{purpose} to {receiver_name} - {receiver_bank} - SUCCESS')
+            )
+            
+            conn.commit()
+            
             return jsonify({
                 'success': True,
                 'status': 'SUCCESS',
                 'message': f'₹{amount} transferred successfully to {receiver_name}',
                 'transaction_id': transaction_id,
                 'new_balance': new_balance
-            })
-            
-        elif transaction_result == 'FAILED':
-            # Step 3: Auto-generate error code
-            error_code = random.choice(list(error_mapping.keys()))
-            error_info = error_mapping[error_code]
-            
-            # Update transaction with failure details
-            cursor.execute(
-                '''UPDATE transactions SET error_code = %s, failure_reason = %s 
-                   WHERE transaction_id = %s''',
-                (error_code, error_info['reason'], transaction_id)
-            )
-            
-            conn.commit()
-            return jsonify({
-                'success': False,
-                'status': 'FAILED',
-                'message': f'Transaction failed: {error_info["reason"]}',
-                'transaction_id': transaction_id,
-                'error_code': error_code,
-                'can_raise_complaint': True
-            })
-            
-        else:  # PENDING
-            conn.commit()
-            return jsonify({
-                'success': True,
-                'status': 'PENDING',
-                'message': 'Transaction is being processed. You will be notified once completed.',
-                'transaction_id': transaction_id,
-                'can_raise_complaint': False
             })
         
     except Exception as e:
@@ -740,6 +720,55 @@ def resolve_complaint(complaint_id):
         return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+
+
+
+@app.route('/api/transaction-status/<transaction_id>', methods=['GET'])
+def get_transaction_status(transaction_id):
+    """Get real-time transaction status"""
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        cursor.execute('''
+            SELECT t.*, a.balance as current_balance
+            FROM transactions t
+            JOIN accounts a ON t.account_id = a.id
+            WHERE t.transaction_id = %s
+        ''', (transaction_id,))
+        
+        transaction = cursor.fetchone()
+        
+        if not transaction:
+            return jsonify({'success': False, 'message': 'Transaction not found'})
+        
+        # Determine status based on error_code presence
+        if transaction['error_code']:
+            status = 'FAILED'
+            can_raise_complaint = True
+        elif transaction['receiver_account'] and 'SUCCESS' in str(transaction['description']):
+            status = 'SUCCESS'
+            can_raise_complaint = False
+        else:
+            status = 'PROCESSING'
+            can_raise_complaint = False
+        
+        return jsonify({
+            'success': True,
+            'transaction_id': transaction_id,
+            'status': status,
+            'amount': float(transaction['amount']),
+            'error_code': transaction['error_code'],
+            'error_message': transaction['failure_reason'],
+            'current_balance': float(transaction['current_balance']),
+            'can_raise_complaint': can_raise_complaint,
+            'created_at': transaction['created_at'].isoformat() if transaction['created_at'] else None
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+    finally:
+        conn.close()
 
 @app.route('/api/validate-account', methods=['POST'])
 def validate_account():
@@ -937,7 +966,10 @@ def chat_with_bot():
         user_id = data.get('user_id')
         
         if not message:
-            return jsonify({'success': False, 'error': 'Message is required'})
+            return jsonify({
+                'success': True,
+                'response': 'Please type a message to get started!'
+            })
         
         from agents.chatbot_agent import BankingChatbotAgent
         chatbot = BankingChatbotAgent()
@@ -948,9 +980,12 @@ def chat_with_bot():
             'response': response
         })
     except Exception as e:
+        print(f"Chat error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
-            'success': False,
-            'error': 'Sorry, I encountered an error processing your request.'
+            'success': True,
+            'response': 'Hello! I am your AI banking assistant. How can I help you today?'
         })
 
 if __name__ == '__main__':
