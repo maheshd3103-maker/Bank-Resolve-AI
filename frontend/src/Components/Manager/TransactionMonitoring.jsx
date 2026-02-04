@@ -1,21 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import './TransactionMonitoring.css';
 
 const TransactionMonitoring = () => {
-  const [flaggedTransactions, setFlaggedTransactions] = useState([]);
-
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
 
+  useEffect(() => {
+    fetchTransactions();
+  }, []);
+
+  const fetchTransactions = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/manager/transactions');
+      const data = await response.json();
+      if (data.success) {
+        setTransactions(data.transactions);
+      }
+    } catch (error) {
+      console.error('Error fetching transactions:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const filteredTransactions = filter === 'all' 
-    ? flaggedTransactions 
-    : flaggedTransactions.filter(t => t.riskLevel.toLowerCase() === filter);
+    ? transactions 
+    : transactions.filter(t => t.transaction_type === filter);
 
-  const handleApproveTransaction = (id) => {
-    console.log('Approving transaction:', id);
-  };
 
-  const handleBlockTransaction = (id) => {
-    console.log('Blocking transaction:', id);
-  };
 
   return (
     <div className="manager-section">
@@ -27,66 +40,67 @@ const TransactionMonitoring = () => {
             className={filter === 'all' ? 'active' : ''} 
             onClick={() => setFilter('all')}
           >
-            All Flagged
+            All Transactions
           </button>
           <button 
-            className={filter === 'high' ? 'active' : ''} 
-            onClick={() => setFilter('high')}
+            className={filter === 'transfer' ? 'active' : ''} 
+            onClick={() => setFilter('transfer')}
           >
-            High Risk
+            Transfers
           </button>
           <button 
-            className={filter === 'medium' ? 'active' : ''} 
-            onClick={() => setFilter('medium')}
+            className={filter === 'deposit' ? 'active' : ''} 
+            onClick={() => setFilter('deposit')}
           >
-            Medium Risk
+            Deposits
+          </button>
+          <button 
+            className={filter === 'failed_transfer' ? 'active' : ''} 
+            onClick={() => setFilter('failed_transfer')}
+          >
+            Failed
           </button>
         </div>
         <div className="monitoring-stats">
           <div className="stat-item">
-            <span className="stat-label">Total Flagged:</span>
-            <span className="stat-value">0</span>
+            <span className="stat-label">Total Transactions:</span>
+            <span className="stat-value">{transactions.length}</span>
           </div>
           <div className="stat-item">
-            <span className="stat-label">High Risk:</span>
-            <span className="stat-value">0</span>
+            <span className="stat-label">Failed:</span>
+            <span className="stat-value">{transactions.filter(t => t.status === 'failed').length}</span>
           </div>
         </div>
       </div>
 
       <div className="transaction-list">
-        {filteredTransactions.length === 0 ? (
-          <div className="no-data">No flagged transactions</div>
+        {loading ? (
+          <div>Loading transactions...</div>
+        ) : filteredTransactions.length === 0 ? (
+          <div className="no-data">No transactions found</div>
         ) : (
-          filteredTransactions.map(transaction => (
-          <div key={transaction.id} className="transaction-card">
-            <div className="transaction-header">
-              <h3>{transaction.userName}</h3>
-              <span className={`risk-level ${transaction.riskLevel.toLowerCase()}`}>
-                {transaction.riskLevel} Risk
-              </span>
+          <div className="transactions-table">
+            <div className="table-header">
+              <span>Transaction ID</span>
+              <span>Customer</span>
+              <span>Type</span>
+              <span>Amount</span>
+              <span>Status</span>
+              <span>Error Code</span>
+              <span>Date</span>
             </div>
-            <div className="transaction-details">
-              <div className="detail-row">
-                <span><strong>Amount:</strong> {transaction.amount}</span>
-                <span><strong>Type:</strong> {transaction.type}</span>
+            {filteredTransactions.map(transaction => (
+              <div key={transaction.id} className="table-row">
+                <span className="transaction-id">{transaction.transaction_id}</span>
+                <span className="customer-name">{transaction.customer_name}</span>
+                <span className="transaction-type">{transaction.transaction_type}</span>
+                <span className="amount">₹{transaction.amount}</span>
+                <span className={`status ${transaction.status}`}>{transaction.status}</span>
+                <span className="error-code">{transaction.error_code || 'N/A'}</span>
+                <span>{new Date(transaction.created_at).toLocaleDateString()}</span>
               </div>
-              <div className="detail-row">
-                <span><strong>Reason:</strong> {transaction.reason}</span>
-                <span><strong>Time:</strong> {transaction.timestamp}</span>
-              </div>
-            </div>
-            <div className="transaction-actions">
-              <button className="investigate-btn">Investigate</button>
-              <button className="approve-btn" onClick={() => handleApproveTransaction(transaction.id)}>
-                Approve
-              </button>
-              <button className="block-btn" onClick={() => handleBlockTransaction(transaction.id)}>
-                Block
-              </button>
-            </div>
+            ))}
           </div>
-          ))
         )}
       </div>
     </div>

@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import './css/account-professional.css';
 
-const AccountManagement = ({ kycCompleted, showKycRequired }) => {
+const AccountManagement = ({ kycCompleted, showKycRequired, onNavigateToKyc }) => {
   const [accounts, setAccounts] = useState([]);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showDepositForm, setShowDepositForm] = useState(false);
   const [depositAmount, setDepositAmount] = useState('');
-  const [isDepositing, setIsDepositing] = useState(false);
-  const [showDepositModal, setShowDepositModal] = useState(false);
 
   useEffect(() => {
     fetchProfile();
@@ -38,13 +38,18 @@ const AccountManagement = ({ kycCompleted, showKycRequired }) => {
     }
   };
 
-  const handleDeposit = async () => {
-    if (!depositAmount || parseFloat(depositAmount) <= 0) {
-      alert('Please enter a valid amount');
+  const handleDeposit = () => {
+    setShowDepositForm(true);
+  };
+
+  const handleDepositSubmit = async () => {
+    const amount = parseFloat(depositAmount);
+    
+    if (!depositAmount || amount <= 0) {
+      alert('Please enter an amount greater than 0');
       return;
     }
-
-    setIsDepositing(true);
+    
     try {
       const userId = localStorage.getItem('user_id');
       const response = await fetch('http://localhost:5000/api/deposit', {
@@ -54,32 +59,40 @@ const AccountManagement = ({ kycCompleted, showKycRequired }) => {
         },
         body: JSON.stringify({
           user_id: userId,
-          amount: parseFloat(depositAmount)
+          amount: amount
         })
       });
-
+      
       const data = await response.json();
       if (data.success) {
+        // Update local balance
         setAccounts(prev => prev.map(account => ({
           ...account,
-          balance: data.new_balance
+          balance: account.balance + amount
         })));
+        setShowDepositForm(false);
         setDepositAmount('');
-        setShowDepositModal(false);
-        alert('Deposit successful!');
-      } else {
-        alert('Deposit failed: ' + data.message);
       }
     } catch (error) {
-      console.error('Error making deposit:', error);
-      alert('Deposit failed. Please try again.');
-    } finally {
-      setIsDepositing(false);
+      console.error('Error depositing money:', error);
     }
   };
 
   if (!kycCompleted) {
-    return showKycRequired();
+    return (
+      <div className="accounts-page">
+        <div className="kyc-required">
+          <div className="requirement-card">
+            <div className="requirement-icon">🔒</div>
+            <h3>KYC Verification Required</h3>
+            <p>Please complete KYC verification to access account management feature.</p>
+            <button onClick={() => onNavigateToKyc && onNavigateToKyc()} className="complete-profile-btn">
+              Complete KYC Now
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (loading) {
@@ -125,46 +138,41 @@ const AccountManagement = ({ kycCompleted, showKycRequired }) => {
                 </div>
               </div>
               
-              {showDepositModal ? (
-                <div className="deposit-section">
-                  <h4>Deposit Amount</h4>
-                  <div className="deposit-input">
-                    <input
-                      type="number"
-                      placeholder="Enter amount"
-                      value={depositAmount}
-                      onChange={(e) => setDepositAmount(e.target.value)}
-                      disabled={isDepositing}
-                    />
-                    <div className="deposit-actions">
-                      <button 
-                        className="cancel-btn" 
-                        onClick={() => setShowDepositModal(false)}
-                      >
-                        Cancel
-                      </button>
-                      <button 
-                        className="deposit-btn" 
-                        onClick={handleDeposit}
-                        disabled={isDepositing || !depositAmount}
-                      >
-                        {isDepositing ? 'Processing...' : 'Deposit'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="account-actions">
-                  <button onClick={() => setShowDepositModal(true)} className="deposit-amount-btn">Deposit Amount</button>
-                  <button>View Details</button>
-                  <button>Download Statement</button>
-                </div>
-              )}
+              <div className="account-actions">
+                <button className="action-btn view-btn">View Details</button>
+                <button className="action-btn deposit-btn" onClick={handleDeposit}>Deposit</button>
+                <button className="action-btn download-btn">Download Statement</button>
+              </div>
             </div>
           ))
         )}
-
       </div>
+      {showDepositForm && (
+        <div className="deposit-form-overlay">
+          <div className="deposit-form">
+            <button 
+              className="close-btn" 
+              onClick={() => setShowDepositForm(false)}
+            >
+              ×
+            </button>
+            <h3>Deposit Money</h3>
+            <input
+              type="number"
+              placeholder="Enter amount"
+              value={depositAmount}
+              onChange={(e) => setDepositAmount(e.target.value)}
+              className="deposit-input"
+            />
+            <button 
+              className="deposit-submit-btn"
+              onClick={handleDepositSubmit}
+            >
+              Deposit
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

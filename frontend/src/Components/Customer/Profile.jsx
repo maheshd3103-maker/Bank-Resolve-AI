@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import './css/profile-validation.css';
+import Notification from '../Notification';
 
 const Profile = ({ onProfileUpdate }) => {
   const [profileData, setProfileData] = useState({
@@ -31,7 +33,60 @@ const Profile = ({ onProfileUpdate }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [sameAddress, setSameAddress] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState(null);
+  const [errors, setErrors] = useState({});
+  const [notification, setNotification] = useState(null);
   
+  const validateField = (name, value) => {
+    const newErrors = { ...errors };
+    
+    switch (name) {
+      case 'mobile_number':
+        if (!/^[6-9]\d{9}$/.test(value)) {
+          newErrors[name] = 'Mobile number must be 10 digits starting with 6-9';
+        } else {
+          delete newErrors[name];
+        }
+        break;
+      case 'aadhaar_number':
+        if (!/^\d{12}$/.test(value)) {
+          newErrors[name] = 'Aadhaar number must be exactly 12 digits';
+        } else {
+          delete newErrors[name];
+        }
+        break;
+      case 'pan_number':
+        if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(value)) {
+          newErrors[name] = 'PAN must be in format ABCDE1234F';
+        } else {
+          delete newErrors[name];
+        }
+        break;
+      case 'pin_code':
+        if (!/^\d{6}$/.test(value)) {
+          newErrors[name] = 'PIN code must be exactly 6 digits';
+        } else {
+          delete newErrors[name];
+        }
+        break;
+      case 'email':
+        if (value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+          newErrors[name] = 'Please enter a valid email address';
+        } else {
+          delete newErrors[name];
+        }
+        break;
+      default:
+        if (!value.trim()) {
+          newErrors[name] = 'This field is required';
+        } else {
+          delete newErrors[name];
+        }
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
   const isProfileComplete = () => {
     const requiredFields = [
       'full_name', 'date_of_birth', 'gender', 'mobile_number', 'occupation',
@@ -43,11 +98,6 @@ const Profile = ({ onProfileUpdate }) => {
 
   useEffect(() => {
     fetchProfile();
-    // Load saved profile photo
-    const savedPhoto = localStorage.getItem(`profile_photo_${localStorage.getItem('user_id')}`);
-    if (savedPhoto) {
-      setProfilePhoto(savedPhoto);
-    }
   }, []);
 
   const formatDateForInput = (dateString) => {
@@ -87,6 +137,10 @@ const Profile = ({ onProfileUpdate }) => {
           date_of_birth: formatDateForInput(data.profile.date_of_birth)
         };
         setProfileData(formattedProfile);
+        // Set profile photo from backend if available
+        if (data.profile.profile_photo_url) {
+          setProfilePhoto(data.profile.profile_photo_url);
+        }
         console.log('Profile data loaded:', formattedProfile);
       } else {
         console.error('Failed to fetch profile:', data);
@@ -106,6 +160,12 @@ const Profile = ({ onProfileUpdate }) => {
   };
 
   const handleSave = async () => {
+    // Check if there are any validation errors
+    if (Object.keys(errors).length > 0) {
+      alert('Please fix all validation errors before saving.');
+      return;
+    }
+    
     try {
       const userId = localStorage.getItem('user_id');
       const response = await fetch(`http://localhost:5000/api/profile/${userId}`, {
@@ -116,7 +176,10 @@ const Profile = ({ onProfileUpdate }) => {
       const data = await response.json();
       if (data.success) {
         setIsEditing(false);
-        alert('Profile updated successfully!');
+        setNotification({
+          type: 'success',
+          message: 'Profile updated successfully!'
+        });
         // Notify Dashboard to refresh profile status
         if (onProfileUpdate) {
           onProfileUpdate();
@@ -128,7 +191,11 @@ const Profile = ({ onProfileUpdate }) => {
   };
 
   const handleChange = (e) => {
-    setProfileData({ ...profileData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    setProfileData({ ...profileData, [name]: value });
+    if (isEditing) {
+      validateField(name, value);
+    }
   };
 
   const handleSameAddressChange = (e) => {
@@ -180,12 +247,11 @@ const Profile = ({ onProfileUpdate }) => {
         const data = await response.json();
         
         if (data.success) {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            setProfilePhoto(e.target.result);
-          };
-          reader.readAsDataURL(file);
-          alert('Profile photo uploaded successfully!');
+          setProfilePhoto(data.photo_url);
+          setNotification({
+            type: 'success',
+            message: 'Profile photo uploaded successfully!'
+          });
         } else {
           alert('Error uploading photo: ' + data.error);
         }
@@ -251,6 +317,13 @@ const Profile = ({ onProfileUpdate }) => {
 
   return (
     <div className="profile-container">
+      {notification && (
+        <Notification 
+          type={notification.type}
+          message={notification.message}
+          onClose={() => setNotification(null)}
+        />
+      )}
       <div className="profile-header">
         <h2>👤 My Profile</h2>
         <div className="profile-actions">
@@ -260,8 +333,8 @@ const Profile = ({ onProfileUpdate }) => {
           {isEditing && (
             <button 
               onClick={handleSave} 
-              className={`save-btn ${!isProfileComplete() ? 'disabled' : ''}`}
-              disabled={!isProfileComplete()}
+              className={`save-btn ${(!isProfileComplete() || Object.keys(errors).length > 0) ? 'disabled' : ''}`}
+              disabled={!isProfileComplete() || Object.keys(errors).length > 0}
             >
               Save Changes
             </button>
@@ -326,7 +399,17 @@ const Profile = ({ onProfileUpdate }) => {
             <div className="profile-field">
               <label>Mobile Number <span className="required">*</span></label>
               {isEditing ? (
-                <input name="mobile_number" value={profileData.mobile_number} onChange={handleChange} required />
+                <div>
+                  <input 
+                    name="mobile_number" 
+                    value={profileData.mobile_number} 
+                    onChange={handleChange} 
+                    pattern="[6-9][0-9]{9}"
+                    maxLength="10"
+                    required 
+                  />
+                  {errors.mobile_number && <span className="error-text">{errors.mobile_number}</span>}
+                </div>
               ) : (
                 <span>{profileData.mobile_number || 'Not provided'}</span>
               )}
@@ -408,7 +491,17 @@ const Profile = ({ onProfileUpdate }) => {
             <div className="profile-field">
               <label>PIN Code <span className="required">*</span></label>
               {isEditing ? (
-                <input name="pin_code" value={profileData.pin_code} onChange={handleChange} required />
+                <div>
+                  <input 
+                    name="pin_code" 
+                    value={profileData.pin_code} 
+                    onChange={handleChange} 
+                    pattern="\d{6}"
+                    maxLength="6"
+                    required 
+                  />
+                  {errors.pin_code && <span className="error-text">{errors.pin_code}</span>}
+                </div>
               ) : (
                 <span>{profileData.pin_code || 'Not provided'}</span>
               )}
@@ -447,14 +540,18 @@ const Profile = ({ onProfileUpdate }) => {
             <div className="profile-field">
               <label>Aadhaar Number <span className="required">*</span></label>
               {isEditing ? (
-                <input 
-                  name="aadhaar_number" 
-                  value={profileData.aadhaar_number} 
-                  onChange={handleChange}
-                  placeholder="Enter 12-digit Aadhaar number"
-                  maxLength="12"
-                  required
-                />
+                <div>
+                  <input 
+                    name="aadhaar_number" 
+                    value={profileData.aadhaar_number} 
+                    onChange={handleChange}
+                    placeholder="Enter 12-digit Aadhaar number"
+                    pattern="\d{12}"
+                    maxLength="12"
+                    required
+                  />
+                  {errors.aadhaar_number && <span className="error-text">{errors.aadhaar_number}</span>}
+                </div>
               ) : (
                 <span>{profileData.aadhaar_number || 'Not provided'}</span>
               )}
@@ -462,15 +559,19 @@ const Profile = ({ onProfileUpdate }) => {
             <div className="profile-field">
               <label>PAN Number <span className="required">*</span></label>
               {isEditing ? (
-                <input 
-                  name="pan_number" 
-                  value={profileData.pan_number} 
-                  onChange={handleChange}
-                  placeholder="Enter PAN number (e.g., ABCDE1234F)"
-                  maxLength="10"
-                  style={{textTransform: 'uppercase'}}
-                  required
-                />
+                <div>
+                  <input 
+                    name="pan_number" 
+                    value={profileData.pan_number} 
+                    onChange={handleChange}
+                    placeholder="Enter PAN number (e.g., ABCDE1234F)"
+                    pattern="[A-Z]{5}[0-9]{4}[A-Z]{1}"
+                    maxLength="10"
+                    style={{textTransform: 'uppercase'}}
+                    required
+                  />
+                  {errors.pan_number && <span className="error-text">{errors.pan_number}</span>}
+                </div>
               ) : (
                 <span>{profileData.pan_number || 'Not provided'}</span>
               )}

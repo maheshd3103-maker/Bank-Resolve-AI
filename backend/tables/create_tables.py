@@ -133,19 +133,60 @@ def create_all_tables():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INT AUTO_INCREMENT PRIMARY KEY,
+                account_id INT,
                 from_account_id INT,
                 to_account_id INT,
-                transaction_type ENUM('deposit', 'withdrawal', 'transfer', 'payment') NOT NULL,
+                transaction_type ENUM('deposit', 'withdrawal', 'transfer', 'payment', 'debit', 'credit', 'refund', 'failed_transfer') NOT NULL,
                 amount DECIMAL(15,2) NOT NULL,
+                before_balance DECIMAL(15,2),
+                balance_after DECIMAL(15,2),
+                transaction_id VARCHAR(50) UNIQUE,
                 description TEXT,
-                status ENUM('pending', 'completed', 'failed', 'cancelled') DEFAULT 'pending',
-                reference_number VARCHAR(50) UNIQUE,
+                status ENUM('pending', 'completed', 'failed', 'cancelled', 'processing') DEFAULT 'pending',
+                error_code VARCHAR(10),
+                reference_number VARCHAR(50),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (account_id) REFERENCES accounts(id),
                 FOREIGN KEY (from_account_id) REFERENCES accounts(id),
                 FOREIGN KEY (to_account_id) REFERENCES accounts(id)
             )
         """)
+        
+        # Complaints table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS complaints (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                complaint_id VARCHAR(20) UNIQUE NOT NULL,
+                user_id INT NOT NULL,
+                transaction_id VARCHAR(50) NOT NULL,
+                error_code VARCHAR(10),
+                issue_description TEXT NOT NULL,
+                status ENUM('submitted', 'processing', 'resolved', 'escalated') DEFAULT 'submitted',
+                priority ENUM('low', 'medium', 'high', 'critical') DEFAULT 'medium',
+                ai_analysis TEXT,
+                resolution_notes TEXT,
+                refund_transaction_id VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        
+        # External accounts table for simulation
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS external_accounts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                account_number VARCHAR(20) UNIQUE NOT NULL,
+                account_holder_name VARCHAR(255) NOT NULL,
+                bank_name VARCHAR(255) NOT NULL,
+                ifsc_code VARCHAR(11),
+                status ENUM('active', 'inactive', 'blocked') DEFAULT 'active',
+                balance DECIMAL(15,2) DEFAULT 0.00,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)        
         
         # Loans table
         cursor.execute("""

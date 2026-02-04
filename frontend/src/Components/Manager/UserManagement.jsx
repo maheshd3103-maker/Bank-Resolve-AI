@@ -6,7 +6,7 @@ const UserManagement = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState(null);
   const [showModal, setShowModal] = useState(false);
-  const [isActive, setIsActive] = useState(true);
+
 
   const fetchCustomers = async () => {
     try {
@@ -80,7 +80,7 @@ const UserManagement = () => {
             <div key={user.id} className="table-row">
               <span>{user.full_name}</span>
               <span>{user.email}</span>
-              <span className={`status ${user.is_active ? 'active' : 'inactive'}`}>{user.is_active ? 'Active' : 'Inactive'}</span>
+              <span className={`status ${user.status === 'active' ? 'active' : 'inactive'}`}>{user.status === 'active' ? 'Active' : 'Inactive'}</span>
               <span className={`kyc-status ${user.kyc_status || 'not_submitted'}`}>
                 {user.kyc_status === 'verified' ? 'Verified' : 
                  user.kyc_status === 'pending' ? 'Pending' : 
@@ -89,8 +89,6 @@ const UserManagement = () => {
               <span>{new Date(user.created_at).toLocaleDateString()}</span>
               <div className="actions">
                 <button className="view-btn" onClick={() => fetchUserDetails(user.id)}>View</button>
-                <button className="edit-btn">Edit</button>
-                <button className="suspend-btn">Suspend</button>
               </div>
             </div>
           ))

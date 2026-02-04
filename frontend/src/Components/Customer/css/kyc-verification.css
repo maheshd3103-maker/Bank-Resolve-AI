@@ -1,0 +1,335 @@
+/* KYC Verification - Modern Banking Style */
+.feature-container {
+  max-width: 900px;
+  margin: 20px auto;
+  padding: 0;
+  background: transparent;
+}
+
+.feature-container h2 {
+  color: #1a202c;
+  font-size: 32px;
+  font-weight: 700;
+  margin-bottom: 40px;
+  text-align: center;
+}
+
+/* Completed Status */
+.kyc-completed-section {
+  background: white;
+  border-radius: 16px;
+  padding: 40px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+  text-align: center;
+}
+
+.status-badge.verified {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  padding: 16px 32px;
+  border-radius: 50px;
+  font-size: 18px;
+  font-weight: 600;
+  display: inline-block;
+  margin-bottom: 32px;
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+}
+
+.existing-documents {
+  text-align: left;
+  margin-top: 32px;
+}
+
+.existing-documents h3 {
+  color: #374151;
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+
+.document-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.view-doc-btn {
+  background: #3b82f6;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.view-doc-btn:hover {
+  background: #2563eb;
+  transform: translateY(-1px);
+}
+
+.update-kyc-btn {
+  background: #f59e0b;
+  color: white;
+  border: none;
+  padding: 14px 28px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 24px;
+  transition: all 0.2s;
+}
+
+.update-kyc-btn:hover {
+  background: #d97706;
+  transform: translateY(-2px);
+}
+
+/* Update Notice */
+.update-notice {
+  background: #fef3c7;
+  border-left: 4px solid #f59e0b;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.update-notice p {
+  color: #92400e;
+  margin: 0 0 12px 0;
+  font-weight: 500;
+}
+
+.cancel-update-btn {
+  background: #6b7280;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+/* KYC Steps */
+.kyc-steps {
+  display: grid;
+  gap: 24px;
+  margin-bottom: 40px;
+}
+
+.kyc-step {
+  background: white;
+  border-radius: 16px;
+  padding: 32px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+  border: 2px solid #f3f4f6;
+  transition: all 0.3s ease;
+}
+
+.kyc-step.active {
+  border-color: #3b82f6;
+  box-shadow: 0 10px 25px rgba(59, 130, 246, 0.15);
+  transform: translateY(-4px);
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+.step-number {
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  color: white;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 20px;
+  margin-right: 16px;
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+  flex-shrink: 0;
+}
+
+.step-header h3 {
+  color: white;
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0;
+  text-align: left;
+  flex: 1;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  color: #374151;
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 15px;
+}
+
+.form-group select {
+  width: 100%;
+  padding: 14px 16px;
+  border: 2px solid #d1d5db;
+  border-radius: 10px;
+  font-size: 16px;
+  background: white;
+  transition: all 0.2s;
+}
+
+.form-group select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Upload Section */
+.upload-section {
+  margin-top: 20px;
+}
+
+.upload-section input[type="file"] {
+  width: 100%;
+  padding: 20px;
+  border: 3px dashed #d1d5db;
+  border-radius: 12px;
+  background: #f9fafb;
+  cursor: pointer;
+  font-size: 16px;
+  text-align: center;
+  transition: all 0.2s;
+}
+
+.upload-section input[type="file"]:hover {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.upload-success {
+  color: #059669;
+  font-weight: 600;
+  margin-top: 12px;
+  display: block;
+  font-size: 16px;
+}
+
+/* Info Banner */
+.info-banner {
+  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 20px 0;
+  display: flex;
+  align-items: center;
+}
+
+.banner-icon {
+  font-size: 28px;
+  margin-right: 16px;
+}
+
+.banner-text {
+  color: #1e40af;
+  font-size: 16px;
+}
+
+.banner-text strong {
+  font-weight: 700;
+}
+
+/* Navigation */
+.kyc-navigation {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 32px 0;
+  border-top: 2px solid #f3f4f6;
+}
+
+.kyc-navigation button {
+  padding: 16px 32px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.kyc-navigation button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.kyc-navigation button:first-child {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.kyc-navigation button:first-child:hover:not(:disabled) {
+  background: #e5e7eb;
+  transform: translateY(-2px);
+}
+
+.submit-kyc {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+}
+
+.submit-kyc:hover:not(:disabled) {
+  background: linear-gradient(135deg, #059669, #047857);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+}
+
+.submit-kyc:disabled {
+  background: #9ca3af;
+  box-shadow: none;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .feature-container {
+    margin: 10px;
+  }
+  
+  .kyc-step {
+    padding: 24px;
+  }
+  
+  .step-header {
+    flex-direction: row;
+    align-items: center;
+    text-align: left;
+  }
+  
+  .step-number {
+    margin-bottom: 0;
+    margin-right: 16px;
+  }
+  
+  .kyc-navigation {
+    flex-direction: column;
+    gap: 16px;
+  }
+  
+  .kyc-navigation button {
+    width: 100%;
+  }
+}

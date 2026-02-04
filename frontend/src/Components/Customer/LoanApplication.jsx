@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const LoanApplication = ({ kycCompleted, showKycRequired }) => {
+const LoanApplication = ({ kycCompleted, showKycRequired, onNavigateToKyc }) => {
   const [loanData, setLoanData] = useState({
     loanType: '',
     amount: '',
@@ -45,7 +45,20 @@ const LoanApplication = ({ kycCompleted, showKycRequired }) => {
   };
 
   if (!kycCompleted) {
-    return showKycRequired();
+    return (
+      <div className="feature-container">
+        <div className="kyc-required">
+          <div className="requirement-card">
+            <div className="requirement-icon">🔒</div>
+            <h3>KYC Verification Required</h3>
+            <p>Please complete KYC verification to access loan application feature.</p>
+            <button onClick={() => onNavigateToKyc && onNavigateToKyc()} className="complete-profile-btn">
+              Complete KYC Now
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (loading) {

@@ -1,8 +1,24 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+import sys
+import os
+
+# Add RAG module to path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'rag'))
+
+try:
+    from rag.api import rag_bp
+except ImportError:
+    rag_bp = None
+except Exception:
+    rag_bp = None
 import mysql.connector
 import hashlib
 import os
+import time
+import random
+import traceback
+import io
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
@@ -19,6 +35,13 @@ CORS(app, resources={
     }
 })
 
+# Register RAG blueprint if available
+if rag_bp:
+    app.register_blueprint(rag_bp)
+    print("RAG API endpoints registered")
+else:
+    print("RAG API not available")
+
 UPLOAD_FOLDER = 'uploads'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
@@ -27,10 +50,10 @@ app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
 
 def get_db_connection():
     conn = mysql.connector.connect(
-        host='localhost',
-        user='root',
-        password='root',  
-        database='banksecure_ai'
+        host=os.getenv('DB_HOST', 'localhost'),
+        user=os.getenv('DB_USER', 'root'),
+        password=os.getenv('DB_PASSWORD', 'root'),  
+        database=os.getenv('DB_NAME', 'banksecure')
     )
     return conn
 
@@ -86,11 +109,21 @@ def login():
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     
+    email = data['email']
     password_hash = hashlib.sha256(data['password'].encode()).hexdigest()
     
+    # First check if email exists
+    cursor.execute('SELECT * FROM users WHERE email = %s', (email,))
+    user_by_email = cursor.fetchone()
+    
+    if not user_by_email:
+        conn.close()
+        return jsonify({'success': False, 'message': 'Email not found. Please check your email or sign up first.'})
+    
+    # Then check password
     cursor.execute(
         'SELECT * FROM users WHERE email = %s AND password_hash = %s',
-        (data['email'], password_hash)
+        (email, password_hash)
     )
     user = cursor.fetchone()
     
@@ -105,7 +138,31 @@ def login():
             'user_role': user.get('role', 'customer')
         })
     else:
-        return jsonify({'success': False, 'message': 'Invalid credentials'})
+        return jsonify({'success': False, 'message': 'Incorrect password. Please try again.'})
+
+def fallback_regex_extraction(ocr_text, extracted_data, file_key):
+    """Fallback regex extraction if AI fails"""
+    import re
+    
+    # Extract Aadhaar number
+    aadhaar_patterns = [
+        r'\b\d{4}\s*\d{4}\s*\d{4}\b',
+        r'\b\d{12}\b'
+    ]
+    
+    for pattern in aadhaar_patterns:
+        match = re.search(pattern, ocr_text)
+        if match:
+            aadhaar = re.sub(r'\D', '', match.group())
+            if len(aadhaar) == 12:
+                extracted_data['aadhaar'] = aadhaar
+                break
+    
+    # Extract PAN number
+    pan_pattern = r'\b[A-Z]{5}\d{4}[A-Z]\b'
+    pan_match = re.search(pan_pattern, ocr_text.upper())
+    if pan_match:
+        extracted_data['pan'] = pan_match.group()
 
 @app.route('/api/kyc/submit', methods=['POST'])
 def complete_kyc_verification():
@@ -116,11 +173,20 @@ def complete_kyc_verification():
             # Create KYC record for JSON request
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute(
-                'INSERT INTO kyc_verification (user_id, document_type, document_number, verification_status, created_at) VALUES (%s, %s, %s, %s, NOW())',
-                (user_id, 'COMPLETE_KYC', 'FULL_VERIFICATION', 'pending')
-            )
-            kyc_id = cursor.lastrowid
+            
+            # Check if KYC record already exists
+            cursor.execute('SELECT id FROM kyc_verification WHERE user_id = %s ORDER BY created_at DESC LIMIT 1', (user_id,))
+            existing_kyc = cursor.fetchone()
+            
+            if existing_kyc:
+                kyc_id = existing_kyc[0]
+            else:
+                cursor.execute(
+                    'INSERT INTO kyc_verification (user_id, document_type, document_number, verification_status, created_at) VALUES (%s, %s, %s, %s, NOW())',
+                    (user_id, 'COMPLETE_KYC', 'FULL_VERIFICATION', 'pending')
+                )
+                kyc_id = cursor.lastrowid
+            
             conn.commit()
             conn.close()
             return jsonify({'success': True, 'message': 'KYC submission created', 'kyc_id': kyc_id})
@@ -133,18 +199,14 @@ def complete_kyc_verification():
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
         
-        # Get or create KYC record
+        # Get existing KYC record (should exist from JSON request)
         cursor.execute('SELECT id FROM kyc_verification WHERE user_id = %s ORDER BY created_at DESC LIMIT 1', (user_id,))
         kyc_record = cursor.fetchone()
         
-        if kyc_record:
-            kyc_id = kyc_record['id']
-        else:
-            cursor.execute(
-                'INSERT INTO kyc_verification (user_id, document_type, document_number, verification_status, created_at) VALUES (%s, %s, %s, %s, NOW())',
-                (user_id, 'COMPLETE_KYC', 'FULL_VERIFICATION', 'pending')
-            )
-            kyc_id = cursor.lastrowid
+        if not kyc_record:
+            return jsonify({'success': False, 'error': 'KYC record not found. Please try again.'})
+        
+        kyc_id = kyc_record['id']
         
         # Get user profile data for validation  
         cursor.execute('SELECT full_name FROM users WHERE id = %s', (user_id,))
@@ -159,18 +221,108 @@ def complete_kyc_verification():
         
         print(f"Profile data - Aadhaar: {profile_aadhaar}, PAN: {profile_pan}")
         
-        # Process uploaded files quickly (no extraction)
+        # Process uploaded files and extract data using OCR
         file_paths = {}
+        extracted_data = {}
+        
         for file_key in ['aadhaar', 'address_proof', 'selfie']:
             if file_key in request.files:
                 file = request.files[file_key]
                 if file.filename != '':
+                    # Delete old document of same type for this user
+                    cursor.execute('SELECT file_path FROM documents WHERE user_id = %s AND document_type = %s', (user_id, file_key))
+                    old_docs = cursor.fetchall()
+                    for old_doc in old_docs:
+                        if old_doc['file_path'] and os.path.exists(old_doc['file_path']):
+                            os.remove(old_doc['file_path'])
+                    
+                    # Delete old document records
+                    cursor.execute('DELETE FROM documents WHERE user_id = %s AND document_type = %s', (user_id, file_key))
+                    
                     filename = secure_filename(file.filename)
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
                     unique_filename = f"{file_key}_{timestamp}{filename}"
                     file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
                     file.save(file_path)
                     file_paths[file_key] = file_path
+                    
+                    # Extract data using OCR
+                    try:
+                        import easyocr
+                        import re
+                        import fitz  # PyMuPDF for PDF handling
+                        
+                        reader = easyocr.Reader(['en'])
+                        ocr_text = ""
+                        
+                        # Handle PDF files
+                        if file_path.lower().endswith('.pdf'):
+                            doc = fitz.open(file_path)
+                            for page in doc:
+                                pix = page.get_pixmap()
+                                img_data = pix.tobytes("ppm")
+                                result = reader.readtext(img_data)
+                                ocr_text += " ".join([text[1] for text in result]) + "\n"
+                            doc.close()
+                        else:
+                            # Handle image files
+                            result = reader.readtext(file_path)
+                            ocr_text = " ".join([text[1] for text in result])
+                        
+                        print(f"\nEasyOCR extracted text from {file_key}:")
+                        print(ocr_text)
+                        
+                        # Use AI to clean and extract data from OCR text
+                        try:
+                            import google.generativeai as genai
+                            genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+                            model = genai.GenerativeModel('gemini-pro')
+                            
+                            prompt = f"""
+                            Extract the following information from this OCR text:
+                            
+                            OCR Text: {ocr_text}
+                            
+                            Please extract and return ONLY:
+                            1. Aadhaar Number (12 digits)
+                            2. PAN Number (format: ABCDE1234F)
+                            3. Full Name
+                            
+                            Return in this exact JSON format:
+                            {{
+                                "aadhaar": "123456789012",
+                                "pan": "ABCDE1234F",
+                                "name": "FULL NAME"
+                            }}
+                            
+                            If any field is not found, use null. Only return the JSON, no other text.
+                            """
+                            
+                            response = model.generate_content(prompt)
+                            ai_result = response.text.strip()
+                            
+                            # Parse AI response
+                            import json
+                            try:
+                                ai_data = json.loads(ai_result)
+                                if ai_data.get('aadhaar'):
+                                    extracted_data['aadhaar'] = ai_data['aadhaar']
+                                if ai_data.get('pan'):
+                                    extracted_data['pan'] = ai_data['pan']
+                                if ai_data.get('name'):
+                                    extracted_data['name'] = ai_data['name']
+                                print(f"AI extracted: {ai_data}")
+                            except json.JSONDecodeError:
+                                print(f"AI response not valid JSON: {ai_result}")
+                                # Fallback to regex extraction
+                                fallback_regex_extraction(ocr_text, extracted_data, file_key)
+                        except Exception as e:
+                            print(f"AI extraction failed: {e}")
+                            # Fallback to regex extraction
+                            fallback_regex_extraction(ocr_text, extracted_data, file_key)
+                    
+                    except Exception as e:
+                        print(f"OCR extraction failed for {file_key}: {e}")
                     
                     cursor.execute(
                         '''INSERT INTO documents (user_id, kyc_id, document_type, file_name, file_path, 
@@ -188,68 +340,78 @@ def complete_kyc_verification():
         conn.commit()
         conn.close()
         
-        # Fast background processing
-        import threading
-        def fast_processing():
-            try:
-                from agents.extract_agent import DocumentExtractAgent
-                from agents.face_verification_agent import FaceVerificationAgent
-                from agents.kyc_approval_agent import KYCApprovalAgent
-                
-                extract_agent = DocumentExtractAgent()
-                face_agent = FaceVerificationAgent()
-                approval_agent = KYCApprovalAgent()
-                
-                validation_results = extract_agent.validate_documents(
-                    aadhaar_path=file_paths.get('aadhaar'),
-                    pan_path=file_paths.get('address_proof'),
-                    profile_aadhaar=profile_aadhaar,
-                    profile_pan=profile_pan,
-                    profile_name=user_name
-                )
-                
-                face_similarity = 0.0
-                if file_paths.get('selfie') and profile_photo_path and os.path.exists(profile_photo_path):
-                    face_result = face_agent.verify_face_match(
-                        profile_photo_path=profile_photo_path,
-                        document_photo_path=file_paths.get('selfie')
-                    )
-                    if face_result:
-                        face_similarity = face_result.get('similarity_score', 0.0)
-                
-                # Use PAN extracted name if available, otherwise use Aadhaar extracted name
-                pan_name = validation_results.get('pan_validation', {}).get('extracted_name')
-                aadhaar_name = validation_results.get('aadhaar_validation', {}).get('extracted_name')
-                extracted_name = pan_name if pan_name else aadhaar_name
-                
-                verification_data = {
-                    'extracted_aadhaar': validation_results.get('aadhaar_validation', {}).get('extracted'),
-                    'extracted_pan': validation_results.get('pan_validation', {}).get('extracted'),
-                    'extracted_name': extracted_name,
-                    'face_similarity': float(face_similarity) if face_similarity else 0.0
-                }
-                
-                import json
-                conn2 = get_db_connection()
-                cursor2 = conn2.cursor()
+        # Compare extracted data with profile data for auto-approval
+        extracted_aadhaar = extracted_data.get('aadhaar')
+        extracted_pan = extracted_data.get('pan')
+        extracted_name = extracted_data.get('name')
+        
+        print(f"\n=== KYC VALIDATION FOR USER {user_id} ===")
+        print(f"Profile data - Aadhaar: {profile_aadhaar}, PAN: {profile_pan}")
+        print(f"Extracted data - Aadhaar: {extracted_aadhaar}, PAN: {extracted_pan}, Name: {extracted_name}")
+        
+        # Check if extracted data matches profile (both Aadhaar and PAN must match)
+        aadhaar_match = (extracted_aadhaar and profile_aadhaar and 
+                        profile_aadhaar.replace(' ', '') == extracted_aadhaar.replace(' ', ''))
+        pan_match = (extracted_pan and profile_pan and profile_pan.upper() == extracted_pan.upper())
+        
+        print(f"Comparison results - Aadhaar match: {aadhaar_match}, PAN match: {pan_match}")
+        
+        # Auto-approve only if both Aadhaar and PAN match
+        if aadhaar_match and pan_match:
+            status = 'verified'
+            print(f"✅ KYC AUTO-APPROVED - Data matches profile")
+        else:
+            status = 'pending'
+            print(f"⏳ KYC PENDING - Data doesn't match profile, requires manual review")
+        
+        print(f"Final verification status: {status}")
+        print("=" * 50)
+        
+        verification_data = {
+            'extracted_aadhaar': extracted_aadhaar,
+            'extracted_pan': extracted_pan,
+            'extracted_name': extracted_name,
+            'face_similarity': 1.0
+        }
+        
+        import json
+        conn2 = get_db_connection()
+        cursor2 = conn2.cursor()
+        cursor2.execute(
+            'UPDATE kyc_verification SET ai_feedback = %s, verification_status = %s WHERE id = %s',
+            (json.dumps(verification_data), status, kyc_id)
+        )
+        
+        # Only create account if KYC is approved
+        if status == 'verified':
+            # Check if account already exists
+            cursor2.execute('SELECT id FROM accounts WHERE user_id = %s', (user_id,))
+            existing_account = cursor2.fetchone()
+            
+            if not existing_account:
+                # Create bank account
+                import random
+                account_number = f"ACC{random.randint(1000000000, 9999999999)}"
                 cursor2.execute(
-                    'UPDATE kyc_verification SET ai_feedback = %s WHERE id = %s',
-                    (json.dumps(verification_data), kyc_id)
+                    '''INSERT INTO accounts (user_id, account_number, account_type, balance, ifsc_code, branch_name, created_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, NOW())''',
+                    (user_id, account_number, 'Savings', 0.00, 'BSAI0001234', 'BankSecure AI Main Branch')
                 )
-                conn2.commit()
-                conn2.close()
-                
-                approval_result = approval_agent.auto_process_kyc(kyc_id, validation_results, face_similarity)
-                print(f"KYC auto-processed: {'Approved' if approval_result.get('approved') else 'Rejected'}")
-                
-            except Exception as e:
-                print(f"Processing error: {e}")
+                print(f"✅ Bank account {account_number} created for user {user_id}")
+            
+            # Update user role
+            cursor2.execute('UPDATE users SET role = %s WHERE id = %s', ('verified_customer', user_id))
         
-        thread = threading.Thread(target=fast_processing)
-        thread.daemon = True
-        thread.start()
+        conn2.commit()
+        conn2.close()
         
-        return jsonify({'success': True, 'message': 'KYC documents submitted successfully'})
+        return jsonify({
+            'success': True, 
+            'message': 'KYC documents submitted successfully!' + (' Your bank account has been created.' if status == 'verified' else ' Documents are under review.'),
+            'kyc_id': kyc_id,
+            'status': status,
+            'auto_approved': status == 'verified'
+        })
         
     except Exception as e:
         print(f"ERROR in complete_kyc_verification: {e}")
@@ -281,7 +443,8 @@ def get_profile(user_id):
             'balance': account_data.get('balance') if account_data else None,
             'ifsc_code': account_data.get('ifsc_code') if account_data else None,
             'branch_name': account_data.get('branch_name') if account_data else None,
-            'account_created': account_data.get('created_at') if account_data else None
+            'account_created': account_data.get('created_at') if account_data else None,
+            'profile_photo_url': f'http://localhost:5000/uploads/{os.path.basename(profile_data["profile_photo"])}' if profile_data and profile_data.get('profile_photo') else None
         }
         
         return jsonify({'success': True, 'profile': profile})
@@ -300,15 +463,27 @@ def upload_profile_photo(user_id):
         if file.filename == '':
             return jsonify({'success': False, 'error': 'No file selected'})
         
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get existing photo path to delete old file
+        cursor.execute('SELECT profile_photo FROM profiles WHERE user_id = %s', (user_id,))
+        existing_profile = cursor.fetchone()
+        
+        # Delete old photo file if exists
+        if existing_profile and existing_profile['profile_photo']:
+            old_file_path = existing_profile['profile_photo']
+            if os.path.exists(old_file_path):
+                os.remove(old_file_path)
+        
+        # Save new photo
         filename = secure_filename(file.filename)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
         unique_filename = f"profile_{user_id}_{timestamp}{filename}"
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(file_path)
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
+        # Update database
         cursor.execute('SELECT id FROM profiles WHERE user_id = %s', (user_id,))
         profile_exists = cursor.fetchone()
         
@@ -320,7 +495,12 @@ def upload_profile_photo(user_id):
         conn.commit()
         conn.close()
         
-        return jsonify({'success': True, 'message': 'Profile photo uploaded successfully', 'photo_path': file_path})
+        return jsonify({
+            'success': True, 
+            'message': 'Profile photo uploaded successfully', 
+            'photo_path': file_path,
+            'photo_url': f'http://localhost:5000/uploads/{unique_filename}'
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -373,6 +553,41 @@ def update_profile(user_id):
     finally:
         conn.close()
 
+@app.route('/api/kyc-documents/<int:user_id>', methods=['GET'])
+def get_kyc_documents(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Get KYC record
+        cursor.execute(
+            'SELECT id, verification_status, created_at FROM kyc_verification WHERE user_id = %s ORDER BY created_at DESC LIMIT 1',
+            (user_id,)
+        )
+        kyc_record = cursor.fetchone()
+        
+        if not kyc_record:
+            return jsonify({'success': False, 'error': 'No KYC record found'})
+        
+        # Get documents
+        cursor.execute(
+            'SELECT document_type, file_name, uploaded_at FROM documents WHERE user_id = %s ORDER BY uploaded_at DESC',
+            (user_id,)
+        )
+        documents = cursor.fetchall()
+        
+        return jsonify({
+            'success': True,
+            'kyc_id': kyc_record['id'],
+            'status': kyc_record['verification_status'],
+            'submitted_at': kyc_record['created_at'],
+            'documents': documents
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
 @app.route('/api/kyc-status/<int:user_id>', methods=['GET'])
 def get_kyc_status(user_id):
     conn = get_db_connection()
@@ -412,7 +627,11 @@ def get_users():
         cursor.execute(
             '''SELECT DISTINCT u.id, u.full_name, u.email, u.role, u.created_at,
                (SELECT verification_status FROM kyc_verification WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1) as kyc_status,
-               a.account_number, a.account_type, a.balance
+               a.account_number, a.account_type, a.balance,
+               CASE 
+                   WHEN (SELECT verification_status FROM kyc_verification WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1) = 'verified' THEN 'active'
+                   ELSE 'inactive'
+               END as status
                FROM users u 
                LEFT JOIN accounts a ON u.id = a.user_id
                WHERE u.role IN ('customer', 'verified_customer')
@@ -459,10 +678,10 @@ def deposit_money():
         
         # Record transaction with ID
         cursor.execute(
-            '''INSERT INTO transactions (account_id, transaction_type, amount, balance_after,
-               transaction_id, description, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, NOW())''',
-            (account['id'], 'deposit', amount, new_balance, transaction_id, f'Cash deposit to account {account["account_number"]}')
+            '''INSERT INTO transactions (account_id, transaction_type, amount, before_balance, balance_after,
+               transaction_id, description, status, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())''',
+            (account['id'], 'deposit', amount, account['balance'], new_balance, transaction_id, f'Cash deposit to account {account["account_number"]}', 'completed')
         )
         
         conn.commit()
@@ -485,13 +704,24 @@ def get_transactions(user_id):
     
     try:
         cursor.execute(
-            '''SELECT t.transaction_id, t.transaction_type, t.amount, t.description, t.created_at
+            '''SELECT t.transaction_id, t.transaction_type, t.amount, t.before_balance, t.balance_after, 
+               t.description, t.status, t.error_code, t.created_at,
+               CASE 
+                   WHEN t.error_code IS NOT NULL THEN CONCAT(t.description, ' - Error: ', t.error_code)
+                   ELSE t.description
+               END as full_description
                FROM transactions t 
                WHERE t.account_id IN (SELECT id FROM accounts WHERE user_id = %s)
                ORDER BY t.created_at DESC LIMIT 50''',
             (user_id,)
         )
         transactions = cursor.fetchall()
+        
+        # Replace description with full_description for failed transactions
+        for txn in transactions:
+            if txn['error_code']:
+                txn['description'] = txn['full_description']
+            txn.pop('full_description', None)
         
         return jsonify({
             'success': True,
@@ -502,6 +732,31 @@ def get_transactions(user_id):
             'success': True,
             'transactions': []
         })
+    finally:
+        conn.close()
+
+@app.route('/api/manager/transactions', methods=['GET'])
+def get_all_transactions():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        cursor.execute(
+            '''SELECT t.id, t.transaction_id, t.transaction_type, t.amount, t.status, t.error_code, t.created_at,
+               u.full_name as customer_name, u.email as customer_email
+               FROM transactions t 
+               JOIN accounts a ON t.account_id = a.id
+               JOIN users u ON a.user_id = u.id
+               ORDER BY t.created_at DESC LIMIT 100'''
+        )
+        transactions = cursor.fetchall()
+        
+        return jsonify({
+            'success': True,
+            'transactions': transactions
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
     finally:
         conn.close()
 
@@ -552,6 +807,86 @@ def get_user_details(user_id):
     finally:
         conn.close()
 
+@app.route('/api/manager/kyc-approve', methods=['POST'])
+def approve_kyc():
+    data = request.json
+    kyc_id = data.get('kyc_id')
+    manager_id = data.get('manager_id')
+    reason = data.get('reason', 'KYC documents verified')
+    
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Get KYC record and user info
+        cursor.execute('SELECT user_id FROM kyc_verification WHERE id = %s', (kyc_id,))
+        kyc_record = cursor.fetchone()
+        
+        if not kyc_record:
+            return jsonify({'success': False, 'error': 'KYC record not found'})
+        
+        user_id = kyc_record['user_id']
+        
+        # Update KYC status to verified
+        cursor.execute(
+            'UPDATE kyc_verification SET verification_status = %s, verified_at = NOW(), manager_notes = %s WHERE id = %s',
+            ('verified', reason, kyc_id)
+        )
+        
+        # Create bank account for the user
+        import random
+        account_number = f"ACC{random.randint(1000000000, 9999999999)}"
+        
+        cursor.execute(
+            '''INSERT INTO accounts (user_id, account_number, account_type, balance, ifsc_code, branch_name, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, NOW())''',
+            (user_id, account_number, 'Savings', 0.00, 'BSAI0001234', 'BankSecure AI Main Branch')
+        )
+        
+        # Update user role to verified_customer
+        cursor.execute('UPDATE users SET role = %s WHERE id = %s', ('verified_customer', user_id))
+        
+        conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'KYC approved successfully. Account {account_number} created for user.'
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/manager/kyc-reject', methods=['POST'])
+def reject_kyc():
+    data = request.json
+    kyc_id = data.get('kyc_id')
+    manager_id = data.get('manager_id')
+    reason = data.get('reason')
+    
+    if not reason:
+        return jsonify({'success': False, 'error': 'Rejection reason is required'})
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Update KYC status to rejected
+        cursor.execute(
+            'UPDATE kyc_verification SET verification_status = %s, verified_at = NOW(), manager_notes = %s WHERE id = %s',
+            ('rejected', reason, kyc_id)
+        )
+        
+        conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'KYC application rejected successfully.'
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 @app.route('/api/manager/kyc-applications', methods=['GET'])
 def get_kyc_applications():
     conn = get_db_connection()
@@ -608,163 +943,149 @@ def get_kyc_applications():
     finally:
         conn.close()
 
+
+
+
+
+
+
+
+
 @app.route('/api/transfer', methods=['POST'])
-def transfer_money():
-    data = request.json
-    user_id = data.get('user_id')
-    receiver_name = data.get('receiver_name')
-    receiver_account = data.get('receiver_account')
-    receiver_bank = data.get('receiver_bank')
-    amount = float(data.get('amount', 0))
-    purpose = data.get('purpose', 'Transfer')
-    
+def transfer():
+    try:
+        from npci_simulator import NPCISimulator
+        
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'transaction_id': 'N/A',
+                'status': 'INVALID_REQUEST',
+                'message': 'Invalid request data',
+                'timestamp': datetime.now().isoformat(),
+                'requires_complaint': False
+            })
+        
+        user_id = data.get('user_id')
+        receiver_account = data.get('receiverAccount')
+        receiver_name = data.get('receiverName')
+        amount = float(data.get('amount', 0))
+        
+        if not all([user_id, receiver_account, receiver_name]) or amount <= 0:
+            return jsonify({
+                'success': False,
+                'transaction_id': 'N/A',
+                'status': 'INVALID_INPUT',
+                'message': 'Missing required fields or invalid amount',
+                'timestamp': datetime.now().isoformat(),
+                'requires_complaint': False
+            })
+        
+        npci = NPCISimulator()
+        result = npci.process_transaction(user_id, receiver_account, amount, receiver_name)
+        
+        # Ensure result has all required fields
+        if not isinstance(result, dict):
+            return jsonify({
+                'success': False,
+                'transaction_id': 'N/A',
+                'status': 'SYSTEM_ERROR',
+                'message': 'Internal system error occurred',
+                'timestamp': datetime.now().isoformat(),
+                'requires_complaint': False
+            })
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"Transfer error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'transaction_id': 'N/A',
+            'status': 'SYSTEM_ERROR',
+            'message': f'System error: {str(e)}',
+            'timestamp': datetime.now().isoformat(),
+            'requires_complaint': False
+        })
+
+@app.route('/api/external-accounts', methods=['GET'])
+def get_external_accounts():
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     
     try:
-        # Get sender account
-        cursor.execute('SELECT id, balance, account_number FROM accounts WHERE user_id = %s', (user_id,))
-        sender_account = cursor.fetchone()
+        cursor.execute('SELECT account_number, account_holder_name, bank_name, status, balance FROM external_accounts ORDER BY account_number')
+        accounts = cursor.fetchall()
         
-        if not sender_account:
-            return jsonify({'success': False, 'message': 'Sender account not found'})
+        return jsonify({
+            'success': True,
+            'accounts': accounts,
+            'total_count': len(accounts)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/external-accounts/seed', methods=['POST'])
+def seed_external_accounts():
+    """Seed external accounts with various statuses for testing"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Sample external accounts with different statuses
+        accounts = [
+            ('1234567890', 'John Doe', 'State Bank of India', 'SBIN0001234', 'active', 50000.00),
+            ('9876543210', 'Jane Smith', 'HDFC Bank', 'HDFC0001234', 'blocked', 25000.00),
+            ('5555666677', 'Mike Johnson', 'ICICI Bank', 'ICIC0001234', 'inactive', 15000.00),
+            ('1111222233', 'Sarah Wilson', 'Axis Bank', 'UTIB0001234', 'active', 75000.00),
+            ('4444555566', 'David Brown', 'Punjab National Bank', 'PUNB0001234', 'blocked', 30000.00),
+            ('7777888899', 'Lisa Davis', 'Canara Bank', 'CNRB0001234', 'inactive', 20000.00),
+            ('3333444455', 'Robert Taylor', 'Bank of Baroda', 'BARB0001234', 'active', 60000.00),
+            ('6666777788', 'Emily Anderson', 'Union Bank of India', 'UBIN0001234', 'blocked', 40000.00)
+        ]
         
-        if float(sender_account['balance']) < amount:
-            return jsonify({'success': False, 'message': 'Insufficient balance'})
-        
-        # Generate transaction ID
-        import random
-        transaction_id = f"TXN{random.randint(100000, 999999)}"
-        
-        # Deduct amount from sender
-        new_balance = float(sender_account['balance']) - amount
-        cursor.execute('UPDATE accounts SET balance = %s WHERE user_id = %s', (new_balance, user_id))
-        
-        # Simulate transaction processing with failure scenarios
-        import time
-        time.sleep(2)  # Simulate processing delay
-        
-        # 30% chance of "Payment debited but not credited" scenario
-        if random.random() < 0.3:
-            # Failed transaction - money debited but not credited
+        for account in accounts:
             cursor.execute(
-                '''INSERT INTO transactions (account_id, transaction_type, amount, balance_after,
-                   transaction_id, receiver_account, description, error_code, failure_reason, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())''',
-                (sender_account['id'], 'transfer', amount, new_balance, 
-                 transaction_id, receiver_account, f'{purpose} to {receiver_name} - {receiver_bank}',
-                 'N06', 'Payment debited but not credited to recipient')
+                '''INSERT IGNORE INTO external_accounts 
+                   (account_number, account_holder_name, bank_name, ifsc_code, status, balance) 
+                   VALUES (%s, %s, %s, %s, %s, %s)''',
+                account
             )
-            
-            conn.commit()
-            
-            return jsonify({
-                'success': False,
-                'status': 'FAILED',
-                'message': 'Transaction failed: Payment debited but not credited to recipient',
-                'transaction_id': transaction_id,
-                'error_code': 'N06',
-                'new_balance': new_balance,
-                'can_raise_complaint': True
-            })
-        else:
-            # Successful transaction
-            cursor.execute(
-                '''INSERT INTO transactions (account_id, transaction_type, amount, balance_after,
-                   transaction_id, receiver_account, description, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())''',
-                (sender_account['id'], 'transfer', amount, new_balance, 
-                 transaction_id, receiver_account, f'{purpose} to {receiver_name} - {receiver_bank} - SUCCESS')
-            )
-            
-            conn.commit()
-            
-            return jsonify({
-                'success': True,
-                'status': 'SUCCESS',
-                'message': f'₹{amount} transferred successfully to {receiver_name}',
-                'transaction_id': transaction_id,
-                'new_balance': new_balance
-            })
         
+        conn.commit()
+        return jsonify({'success': True, 'message': 'External accounts seeded successfully'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
     finally:
         conn.close()
 
-@app.route('/api/manager/complaints', methods=['GET'])
-def get_complaints():
-    try:
-        from agents.complaint_handler_agent import ComplaintHandlerAgent
-        agent = ComplaintHandlerAgent()
-        complaints = agent.get_pending_complaints()
-        
-        return jsonify({
-            'success': True,
-            'complaints': complaints
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/manager/complaints/<complaint_id>/resolve', methods=['POST'])
-def resolve_complaint(complaint_id):
+@app.route('/api/external-accounts/update-status', methods=['POST'])
+def update_account_status():
     data = request.json
-    resolution_notes = data.get('resolution_notes')
-    refund_amount = data.get('refund_amount')
+    account_number = data.get('account_number')
+    new_status = data.get('status')
     
-    try:
-        from agents.complaint_handler_agent import ComplaintHandlerAgent
-        agent = ComplaintHandlerAgent()
-        result = agent.resolve_complaint_manually(complaint_id, resolution_notes, refund_amount)
-        
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-
-
-@app.route('/api/transaction-status/<transaction_id>', methods=['GET'])
-def get_transaction_status(transaction_id):
-    """Get real-time transaction status"""
+    if new_status not in ['active', 'inactive', 'blocked']:
+        return jsonify({'success': False, 'message': 'Invalid status'})
+    
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
     
     try:
-        cursor.execute('''
-            SELECT t.*, a.balance as current_balance
-            FROM transactions t
-            JOIN accounts a ON t.account_id = a.id
-            WHERE t.transaction_id = %s
-        ''', (transaction_id,))
+        cursor.execute('UPDATE external_accounts SET status = %s WHERE account_number = %s', (new_status, account_number))
         
-        transaction = cursor.fetchone()
-        
-        if not transaction:
-            return jsonify({'success': False, 'message': 'Transaction not found'})
-        
-        # Determine status based on error_code presence
-        if transaction['error_code']:
-            status = 'FAILED'
-            can_raise_complaint = True
-        elif transaction['receiver_account'] and 'SUCCESS' in str(transaction['description']):
-            status = 'SUCCESS'
-            can_raise_complaint = False
+        if cursor.rowcount > 0:
+            conn.commit()
+            return jsonify({'success': True, 'message': f'Account status updated to {new_status}'})
         else:
-            status = 'PROCESSING'
-            can_raise_complaint = False
-        
-        return jsonify({
-            'success': True,
-            'transaction_id': transaction_id,
-            'status': status,
-            'amount': float(transaction['amount']),
-            'error_code': transaction['error_code'],
-            'error_message': transaction['failure_reason'],
-            'current_balance': float(transaction['current_balance']),
-            'can_raise_complaint': can_raise_complaint,
-            'created_at': transaction['created_at'].isoformat() if transaction['created_at'] else None
-        })
-        
+            return jsonify({'success': False, 'message': 'Account not found'})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
     finally:
@@ -779,15 +1100,30 @@ def validate_account():
     cursor = conn.cursor(dictionary=True)
     
     try:
-        cursor.execute('SELECT account_holder_name, bank_name, status FROM external_accounts WHERE account_number = %s', (account_number,))
+        cursor.execute('SELECT account_holder_name, bank_name, status, balance FROM external_accounts WHERE account_number = %s', (account_number,))
         account = cursor.fetchone()
         
         if account:
+            # Check account status
+            if account['status'] == 'blocked':
+                return jsonify({
+                    'success': False,
+                    'message': 'Account is blocked and cannot receive transfers',
+                    'status': 'blocked'
+                })
+            elif account['status'] == 'inactive':
+                return jsonify({
+                    'success': False,
+                    'message': 'Account is inactive and cannot receive transfers',
+                    'status': 'inactive'
+                })
+            
             return jsonify({
                 'success': True,
                 'account_holder_name': account['account_holder_name'],
                 'bank_name': account['bank_name'],
-                'status': account['status']
+                'status': account['status'],
+                'balance': float(account['balance'])
             })
         else:
             return jsonify({'success': False, 'message': 'Account not found'})
@@ -796,105 +1132,7 @@ def validate_account():
     finally:
         conn.close()
 
-@app.route('/api/complaints', methods=['POST'])
-def submit_complaint():
-    data = request.json
-    user_id = data.get('user_id')
-    transaction_id = data.get('transaction_id')
-    
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    
-    try:
-        # Step 1: Get transaction details and error code
-        cursor.execute(
-            'SELECT * FROM transactions WHERE transaction_id = %s AND account_id IN (SELECT id FROM accounts WHERE user_id = %s)',
-            (transaction_id, user_id)
-        )
-        transaction = cursor.fetchone()
-        
-        if not transaction:
-            return jsonify({'success': False, 'message': 'Transaction not found'})
-        
-        # Generate complaint ID
-        import random
-        complaint_id = f"CMP{random.randint(100000, 999999)}"
-        
-        # Step 2: Root Cause Analysis based on error code
-        error_code = transaction.get('error_code')
-        error_mapping = {
-            'U17': {'reason': 'Receiver bank down', 'action': 'Auto-refund after 48 hrs', 'resolution_time': '48 hours', 'auto_resolve': True},
-            'N05': {'reason': 'Network timeout', 'action': 'Auto requery + refund', 'resolution_time': '24 hours', 'auto_resolve': True},
-            'R01': {'reason': 'Payment Switch declined', 'action': 'Manual review required', 'resolution_time': '3-5 days', 'auto_resolve': False},
-            'B03': {'reason': 'Beneficiary account mismatch', 'action': 'User correction needed', 'resolution_time': '1-2 days', 'auto_resolve': False},
-            'F29': {'reason': 'Fraud/Rule check failed', 'action': 'Escalate to compliance', 'resolution_time': '5-7 days', 'auto_resolve': False},
-            'D52': {'reason': 'Insufficient sender balance', 'action': 'Add funds and retry', 'resolution_time': '1 hour', 'auto_resolve': True}
-        }
-        
-        root_cause_info = error_mapping.get(error_code, {
-            'reason': 'Unknown error', 
-            'action': 'Manual review required', 
-            'resolution_time': '2-3 days', 
-            'auto_resolve': False
-        })
-        
-        # Determine status based on auto-resolve capability
-        complaint_status = 'AUTO_PROCESSING' if root_cause_info['auto_resolve'] else 'MANUAL_REVIEW'
-        
-        # Step 3: Insert complaint with root cause analysis
-        cursor.execute(
-            '''INSERT INTO complaints (complaint_id, user_id, transaction_id, transaction_date, 
-               amount, receiver_account, issue_type, description, priority, status, 
-               root_cause, resolution_action, estimated_resolution, created_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())''',
-            (complaint_id, user_id, transaction_id, transaction['created_at'].date(),
-             transaction['amount'], transaction['receiver_account'], 
-             data.get('issue_type', 'failed_transaction'), data.get('additional_comments', ''),
-             'high', complaint_status, root_cause_info['reason'], 
-             root_cause_info['action'], root_cause_info['resolution_time'])
-        )
-        
-        conn.commit()
-        
-        # Step 4: Process complaint with AI agent
-        import threading
-        def process_with_agent():
-            try:
-                from agents.complaint_handler_agent import ComplaintHandlerAgent
-                agent = ComplaintHandlerAgent()
-                result = agent.process_complaint(complaint_id)
-                print(f"Agent processed complaint {complaint_id}: {result}")
-            except Exception as e:
-                print(f"Agent processing error: {e}")
-        
-        # Process in background
-        thread = threading.Thread(target=process_with_agent)
-        thread.daemon = True
-        thread.start()
-        
-        # Step 5: Prepare response
-        response_data = {
-            'complaint_id': complaint_id,
-            'status': complaint_status,
-            'root_cause': root_cause_info['reason'],
-            'resolution_action': root_cause_info['action'],
-            'estimated_resolution': root_cause_info['resolution_time']
-        }
-        
-        if root_cause_info['auto_resolve']:
-            response_data['message'] = 'Your complaint is being processed automatically. Refund will be initiated shortly.'
-        else:
-            response_data['message'] = 'Your complaint requires manual review by our support team.'
-        
-        return jsonify({
-            'success': True,
-            'ai_response': response_data
-        })
-        
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
-    finally:
-        conn.close()
+
 
 def old_submit_complaint():
     data = request.json
@@ -958,6 +1196,583 @@ def old_submit_complaint():
     finally:
         conn.close()
 
+@app.route('/api/complaints/<complaint_id>/track', methods=['GET'])
+def track_complaint(complaint_id):
+    """Track complaint processing status with detailed steps"""
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Get complaint details
+        cursor.execute(
+            '''SELECT c.*, t.amount, t.before_balance, t.balance_after, t.error_code as txn_error_code
+               FROM complaints c 
+               LEFT JOIN transactions t ON c.transaction_id = t.transaction_id 
+               WHERE c.complaint_id = %s''',
+            (complaint_id,)
+        )
+        complaint = cursor.fetchone()
+        
+        if not complaint:
+            return jsonify({'success': False, 'message': 'Complaint not found'})
+        
+        # Get processing steps from complaint resolution notes
+        processing_steps = []
+        
+        if complaint['status'] == 'processing':
+            processing_steps = [
+                {'step': 1, 'title': 'Complaint Received', 'status': 'completed', 'message': f'Complaint {complaint_id} registered successfully'},
+                {'step': 2, 'title': 'AI Agent Assigned', 'status': 'in_progress', 'message': 'LangGraph Complaint Agent is analyzing your case'},
+                {'step': 3, 'title': 'Transaction Verification', 'status': 'pending', 'message': 'Checking transaction details and debit status'},
+                {'step': 4, 'title': 'Account Validation', 'status': 'pending', 'message': 'Validating sender and receiver accounts'},
+                {'step': 5, 'title': 'Refund Processing', 'status': 'pending', 'message': 'Processing refund if eligible'}
+            ]
+        elif complaint['status'] == 'resolved':
+            processing_steps = [
+                {'step': 1, 'title': 'Complaint Received', 'status': 'completed', 'message': f'Complaint {complaint_id} registered successfully'},
+                {'step': 2, 'title': 'AI Agent Processing', 'status': 'completed', 'message': 'LangGraph agent completed analysis'},
+                {'step': 3, 'title': 'Transaction Verified', 'status': 'completed', 'message': f'Transaction {complaint["transaction_id"]} verified - Amount ₹{complaint["amount"]} was debited'},
+                {'step': 4, 'title': 'Accounts Validated', 'status': 'completed', 'message': 'Sender and receiver accounts validated successfully'},
+                {'step': 5, 'title': 'Refund Completed', 'status': 'completed', 'message': f'Refund of ₹{complaint["amount"]} processed successfully'}
+            ]
+        
+        return jsonify({
+            'success': True,
+            'complaint': complaint,
+            'processing_steps': processing_steps,
+            'current_status': complaint['status']
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/complaints/process/<complaint_id>', methods=['POST'])
+def process_complaint(complaint_id):
+    from agents.complaint_agent_langgraph import ComplaintAgentLangGraph
+    
+    agent = ComplaintAgentLangGraph()
+    result = agent.process_complaint(complaint_id)
+    
+    return jsonify(result)
+
+@app.route('/api/complaint', methods=['POST'])
+def submit_complaint():
+    data = request.json
+    user_id = data.get('user_id')
+    transaction_id = data.get('transactionId')
+    issue_description = data.get('issue')
+    
+    if not all([user_id, transaction_id, issue_description]):
+        return jsonify({'success': False, 'message': 'Missing required fields'})
+    
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Verify transaction exists and get error code
+        cursor.execute('SELECT error_code, amount, status FROM transactions WHERE transaction_id = %s AND account_id IN (SELECT id FROM accounts WHERE user_id = %s)', 
+                      (transaction_id, user_id))
+        transaction = cursor.fetchone()
+        
+        if not transaction:
+            return jsonify({'success': False, 'message': 'Transaction not found'})
+        
+        # Generate complaint ID
+        import random
+        complaint_id = f"CMP{random.randint(100000, 999999)}"
+        
+        # Determine priority based on error code
+        error_code = transaction.get('error_code')
+        if error_code in ['S31', 'S22']:
+            priority = 'critical'
+        elif error_code in ['U20', 'T01', 'U18', 'T06']:
+            priority = 'high'
+        elif error_code in ['R05', 'R30', 'U28']:
+            priority = 'medium'
+        else:
+            priority = 'low'
+        
+        # Insert complaint
+        cursor.execute(
+            '''INSERT INTO complaints (complaint_id, user_id, transaction_id, error_code, 
+               issue_description, priority, status, created_at) 
+               VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())''',
+            (complaint_id, user_id, transaction_id, error_code, issue_description, priority, 'processing')
+        )
+        
+        conn.commit()
+        conn.close()  # Close connection to ensure commit is flushed
+        
+        print(f"\n" + "="*80)
+        print(f"[COMPLAINT SYSTEM] NEW COMPLAINT RECEIVED")
+        print(f"[COMPLAINT ID] {complaint_id}")
+        print(f"[USER ID] {user_id}")
+        print(f"[TRANSACTION ID] {transaction_id}")
+        print(f"[ERROR CODE] {error_code}")
+        print(f"[PRIORITY] {priority}")
+        print(f"[STATUS] Processing - AI Agent will handle this complaint")
+        print("="*80)
+        
+        # Start background processing with LangGraph agent
+        import threading
+        def process_complaint_background():
+            try:
+                print(f"\n[BACKGROUND AGENT] Starting complaint processing for {complaint_id}")
+                from agents.complaint_agent_langgraph import ComplaintAgentLangGraph
+                agent = ComplaintAgentLangGraph()
+                agent.process_complaint(complaint_id, issue_description)
+            except Exception as e:
+                print(f"[ERROR] Agent processing failed: {e}")
+        
+        # Start agent processing in background
+        thread = threading.Thread(target=process_complaint_background)
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Complaint submitted successfully!',
+            'complaint_id': complaint_id,
+            'transaction_id': transaction_id,
+            'amount': float(transaction['amount']),
+            'status': 'processing',
+            'priority': priority,
+            'error_code': error_code,
+            'tracking_message': f'Your complaint {complaint_id} for transaction {transaction_id} (₹{transaction["amount"]}) is being processed by our AI agent.',
+            'show_tracking_button': True,
+            'tracking_url': f'/complaints/{complaint_id}/track'
+        })
+    
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+def process_complaint_ai(complaint_id, error_code, transaction, cursor, conn):
+    """AI agent processes complaint automatically"""
+    
+    # Auto-refund errors (money was debited)
+    if error_code in ['S31', 'U20', 'T01', 'S05', 'U18', 'T06', 'S22']:
+        # Process immediate refund
+        amount = float(transaction['amount'])
+        
+        # Get user account from complaint
+        cursor.execute('SELECT user_id FROM complaints WHERE complaint_id = %s', (complaint_id,))
+        user_data = cursor.fetchone()
+        
+        if user_data:
+            # Credit back the amount
+            cursor.execute('UPDATE accounts SET balance = balance + %s WHERE user_id = %s', 
+                         (amount, user_data['user_id']))
+            
+            # Create refund transaction
+            refund_txn_id = f"REF{int(time.time())}{random.randint(100, 999)}"
+            
+            # Get current balance for refund transaction
+            cursor.execute('SELECT balance FROM accounts WHERE user_id = %s', (user_data['user_id'],))
+            current_balance_data = cursor.fetchone()
+            current_balance = float(current_balance_data['balance']) if current_balance_data else 0.0
+            new_balance_after_refund = current_balance + amount
+            
+            cursor.execute(
+                '''INSERT INTO transactions (account_id, transaction_type, amount, before_balance, balance_after,
+                   transaction_id, description, status, created_at) VALUES 
+                   ((SELECT id FROM accounts WHERE user_id = %s), 'refund', %s, %s, %s, %s, %s, 'completed', NOW())''',
+                (user_data['user_id'], amount, current_balance, new_balance_after_refund, refund_txn_id, f'Auto-refund for complaint {complaint_id}')
+            )
+            
+            # Update complaint status
+            cursor.execute(
+                '''UPDATE complaints SET status = 'resolved', resolution_notes = %s, 
+                   refund_transaction_id = %s, resolved_at = NOW() WHERE complaint_id = %s''',
+                (f'Auto-refund processed. Amount ₹{amount} credited back.', refund_txn_id, complaint_id)
+            )
+            
+            conn.commit()
+            
+            return {
+                'status': 'resolved',
+                'message': f'Auto-refund of ₹{amount} processed successfully',
+                'tracking_id': complaint_id,
+                'next_steps': [
+                    'Refund completed automatically',
+                    'Amount credited to your account',
+                    'Transaction reversed successfully'
+                ]
+            }
+    
+    # No refund needed (money wasn't debited)
+    elif error_code in ['S10', 'U14', 'C01', 'C02', 'C03', 'C05']:
+        cursor.execute(
+            '''UPDATE complaints SET status = 'resolved', resolution_notes = %s, resolved_at = NOW() 
+               WHERE complaint_id = %s''',
+            ('No refund needed as money was not debited from your account.', complaint_id)
+        )
+        conn.commit()
+        
+        return {
+            'status': 'resolved',
+            'message': 'No refund needed - money was not debited',
+            'tracking_id': complaint_id,
+            'next_steps': [
+                'Transaction failed before debit',
+                'Your account balance is safe',
+                'You can retry the transaction'
+            ]
+        }
+    
+    # Escalate complex cases
+    else:
+        cursor.execute(
+            '''UPDATE complaints SET status = 'escalated', ai_analysis = %s WHERE complaint_id = %s''',
+            (f'Escalated to manual review team for error code {error_code}', complaint_id)
+        )
+        conn.commit()
+        
+        return {
+            'status': 'escalated',
+            'message': 'Complaint escalated to specialist team',
+            'tracking_id': complaint_id,
+            'next_steps': [
+                'Manual review in progress',
+                'Specialist team assigned',
+                'Resolution within 2-3 business days'
+            ]
+        }
+
+@app.route('/api/complaints/<int:user_id>', methods=['GET'])
+def get_user_complaints(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        cursor.execute(
+            '''SELECT c.*, t.amount FROM complaints c 
+               LEFT JOIN transactions t ON c.transaction_id = t.transaction_id 
+               WHERE c.user_id = %s ORDER BY c.created_at DESC''',
+            (user_id,)
+        )
+        complaints = cursor.fetchall()
+        
+        return jsonify({
+            'success': True,
+            'complaints': complaints
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/manager/complaints', methods=['GET'])
+def get_all_complaints():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        cursor.execute(
+            '''SELECT c.complaint_id, c.transaction_id, c.error_code, c.issue_description, 
+               c.status, c.priority, c.created_at, c.resolved_at, c.resolution_notes,
+               u.full_name as customer_name, u.email as customer_email,
+               t.amount
+               FROM complaints c 
+               JOIN users u ON c.user_id = u.id
+               LEFT JOIN transactions t ON c.transaction_id = t.transaction_id 
+               ORDER BY c.created_at DESC'''
+        )
+        complaints = cursor.fetchall()
+        
+        return jsonify({
+            'success': True,
+            'complaints': complaints
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/manager/manual-review', methods=['GET'])
+def get_manual_review_transactions():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        cursor.execute(
+            '''SELECT c.complaint_id, c.transaction_id, c.error_code, c.issue_description, 
+               c.created_at, u.full_name as customer_name, t.amount
+               FROM complaints c 
+               JOIN users u ON c.user_id = u.id
+               LEFT JOIN transactions t ON c.transaction_id = t.transaction_id 
+               WHERE c.status = 'escalated'
+               ORDER BY c.created_at DESC'''
+        )
+        manual_reviews = cursor.fetchall()
+        
+        return jsonify({
+            'success': True,
+            'manual_reviews': manual_reviews
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/manager/complaints/<complaint_id>/resolve', methods=['POST'])
+def resolve_complaint_manual():
+    data = request.json
+    complaint_id = data.get('complaint_id') or complaint_id
+    resolution_notes = data.get('resolution_notes')
+    refund_amount = float(data.get('refund_amount', 0))
+    
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Get complaint details
+        cursor.execute(
+            '''SELECT c.user_id, c.transaction_id, t.amount 
+               FROM complaints c 
+               LEFT JOIN transactions t ON c.transaction_id = t.transaction_id 
+               WHERE c.complaint_id = %s''',
+            (complaint_id,)
+        )
+        complaint_data = cursor.fetchone()
+        
+        if not complaint_data:
+            return jsonify({'success': False, 'message': 'Complaint not found'})
+        
+        user_id = complaint_data['user_id']
+        transaction_id = complaint_data['transaction_id']
+        
+        # Process refund if amount > 0
+        refund_txn_id = None
+        if refund_amount > 0:
+            # Credit back the amount
+            cursor.execute('UPDATE accounts SET balance = balance + %s WHERE user_id = %s', 
+                          (refund_amount, user_id))
+            
+            # Create refund transaction
+            import random
+            refund_txn_id = f"REF{int(time.time())}{random.randint(100, 999)}"
+            
+            cursor.execute(
+                '''INSERT INTO transactions (account_id, transaction_type, amount, transaction_id, 
+                   description, status, created_at) VALUES 
+                   ((SELECT id FROM accounts WHERE user_id = %s), 'refund', %s, %s, %s, 'completed', NOW())''',
+                (user_id, refund_amount, refund_txn_id, f'Manual refund for complaint {complaint_id}')
+            )
+        
+        # Update complaint status
+        cursor.execute(
+            '''UPDATE complaints SET status = 'resolved', resolution_notes = %s, 
+               refund_transaction_id = %s, resolved_at = NOW() WHERE complaint_id = %s''',
+            (resolution_notes, refund_txn_id, complaint_id)
+        )
+        
+        conn.commit()
+        
+        message = f'Complaint resolved successfully.'
+        if refund_amount > 0:
+            message += f' Refund of ₹{refund_amount} processed.'
+        
+        return jsonify({
+            'success': True,
+            'message': message,
+            'refund_transaction_id': refund_txn_id
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+    finally:
+        conn.close()
+    data = request.json
+    complaint_id = data.get('complaint_id')
+    
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Get complaint and transaction details
+        cursor.execute(
+            '''SELECT c.user_id, c.transaction_id, t.amount 
+               FROM complaints c 
+               LEFT JOIN transactions t ON c.transaction_id = t.transaction_id 
+               WHERE c.complaint_id = %s''',
+            (complaint_id,)
+        )
+        complaint_data = cursor.fetchone()
+        
+        if not complaint_data or not complaint_data['transaction_id']:
+            return jsonify({'success': False, 'message': 'Complaint or transaction not found'})
+        
+        amount = float(complaint_data['amount'])
+        user_id = complaint_data['user_id']
+        transaction_id = complaint_data['transaction_id']
+        
+        # Credit back the amount
+        cursor.execute('UPDATE accounts SET balance = balance + %s WHERE user_id = %s', 
+                      (amount, user_id))
+        
+        # Create refund transaction
+        import random
+        refund_txn_id = f"REF{int(time.time())}{random.randint(100, 999)}"
+        
+        # Get current balance before refund
+        cursor.execute('SELECT balance FROM accounts WHERE user_id = %s', (user_id,))
+        current_balance_data = cursor.fetchone()
+        current_balance = float(current_balance_data['balance']) if current_balance_data else 0.0
+        new_balance_after_refund = current_balance + amount
+        
+        cursor.execute(
+            '''INSERT INTO transactions (account_id, transaction_type, amount, before_balance, balance_after,
+               transaction_id, description, status, created_at) VALUES 
+               ((SELECT id FROM accounts WHERE user_id = %s), 'refund', %s, %s, %s, %s, %s, 'completed', NOW())''',
+            (user_id, amount, current_balance, new_balance_after_refund, refund_txn_id, f'Manual refund for complaint {complaint_id}')
+        )
+        
+        # Update original transaction status
+        cursor.execute(
+            '''UPDATE transactions SET status = 'refunded', 
+               description = CONCAT(COALESCE(description, ''), ' - Manual refund processed') 
+               WHERE transaction_id = %s''',
+            (transaction_id,)
+        )
+        
+        # Update complaint status
+        cursor.execute(
+            '''UPDATE complaints SET status = 'resolved', resolution_notes = %s, 
+               refund_transaction_id = %s, resolved_at = NOW() WHERE complaint_id = %s''',
+            (f'Manual refund processed. Amount ₹{amount} credited back.', refund_txn_id, complaint_id)
+        )
+        
+        conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Refund of ₹{amount} processed successfully. Transaction {transaction_id} updated to refunded.',
+            'refund_transaction_id': refund_txn_id,
+            'original_transaction_id': transaction_id
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/test/check-transaction/<transaction_id>', methods=['GET'])
+def check_transaction_status(transaction_id):
+    """Check specific transaction status"""
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        cursor.execute('SELECT * FROM transactions WHERE transaction_id = %s', (transaction_id,))
+        transaction = cursor.fetchone()
+        
+        if not transaction:
+            return jsonify({'success': False, 'message': 'Transaction not found'})
+        
+        cursor.execute('SELECT * FROM complaints WHERE transaction_id = %s', (transaction_id,))
+        complaint = cursor.fetchone()
+        
+        return jsonify({
+            'success': True,
+            'transaction': transaction,
+            'complaint': complaint
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/test/fix-transaction/<transaction_id>', methods=['POST'])
+def fix_transaction_status(transaction_id):
+    """Fix transaction status to refunded"""
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        cursor.execute(
+            '''UPDATE transactions SET status = 'refunded', 
+               description = CONCAT(COALESCE(description, ''), ' - Manual refund processed') 
+               WHERE transaction_id = %s''',
+            (transaction_id,)
+        )
+        
+        if cursor.rowcount > 0:
+            conn.commit()
+            return jsonify({'success': True, 'message': f'Transaction {transaction_id} updated to refunded'})
+        else:
+            return jsonify({'success': False, 'message': 'Transaction not found'})
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/test/create-escalated-complaints', methods=['POST'])
+def create_test_escalated_complaints():
+    """Create test escalated complaints for manual review demo"""
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Get some users and create test transactions and complaints
+        cursor.execute('SELECT id, full_name FROM users WHERE role = "customer" LIMIT 3')
+        users = cursor.fetchall()
+        
+        if not users:
+            return jsonify({'success': False, 'message': 'No customer users found'})
+        
+        test_complaints = []
+        
+        for i, user in enumerate(users):
+            # Create a failed transaction
+            txn_id = f"TXN{int(time.time())}{random.randint(100, 999)}"
+            amount = random.choice([5000, 15000, 25000])
+            error_code = random.choice(['R30', 'R13', 'S22'])
+            
+            cursor.execute(
+                '''INSERT INTO transactions (account_id, transaction_type, amount, transaction_id, 
+                   description, status, error_code, created_at) VALUES 
+                   ((SELECT id FROM accounts WHERE user_id = %s), 'failed_transfer', %s, %s, %s, 'failed', %s, NOW())''',
+                (user['id'], amount, txn_id, f'Failed transfer - Error {error_code}', error_code)
+            )
+            
+            # Create escalated complaint
+            complaint_id = f"CMP{random.randint(100000, 999999)}"
+            issue_descriptions = [
+                f'Money debited but transfer failed with error {error_code}',
+                f'Transaction stuck in processing state - {error_code}',
+                f'Network error during transfer - amount not credited to receiver'
+            ]
+            
+            cursor.execute(
+                '''INSERT INTO complaints (complaint_id, user_id, transaction_id, error_code, 
+                   issue_description, priority, status, created_at) 
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())''',
+                (complaint_id, user['id'], txn_id, error_code, issue_descriptions[i], 'high', 'escalated')
+            )
+            
+            test_complaints.append({
+                'complaint_id': complaint_id,
+                'customer': user['full_name'],
+                'amount': amount,
+                'error_code': error_code
+            })
+        
+        conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Created {len(test_complaints)} test escalated complaints',
+            'complaints': test_complaints
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+    finally:
+        conn.close()
+
 @app.route('/api/chat', methods=['POST'])
 def chat_with_bot():
     try:
@@ -971,18 +1786,33 @@ def chat_with_bot():
                 'response': 'Please type a message to get started!'
             })
         
-        from agents.chatbot_agent import BankingChatbotAgent
-        chatbot = BankingChatbotAgent()
-        response = chatbot.process_message(message, user_id)
+        # RAG chatbot only
+        try:
+            print(f"Processing message: '{message}' for user: {user_id}")
+            from agents.chatbot_agent_langgraph import ChatbotAgentLangGraph
+            from rag.rag_service import RAGService
+            
+            rag_service = RAGService()
+            chatbot = ChatbotAgentLangGraph(rag_service)
+            print("Chatbot initialized, calling process_message...")
+            response = chatbot.process_message(message, user_id)
+            print(f"Chatbot response: {response}")
+            
+            return jsonify({
+                'success': True,
+                'response': response
+            })
+        except Exception as e:
+            print(f"Chatbot error: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                'success': True,
+                'response': f'Error: {str(e)}'
+            })
         
-        return jsonify({
-            'success': True,
-            'response': response
-        })
     except Exception as e:
         print(f"Chat error: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({
             'success': True,
             'response': 'Hello! I am your AI banking assistant. How can I help you today?'

@@ -19,28 +19,28 @@ const KYCApprovals = () => {
   };
 
   const getMatchDisplay = (profileValue, extractedValue, type) => {
-    // For debugging - show what we actually have
-    console.log(`${type} Values:`, { profile: profileValue, extracted: extractedValue });
-    
-    // Show extracted value if it exists, regardless of profile
-    if (extractedValue && extractedValue !== 'Not extracted' && extractedValue !== 'null' && extractedValue !== null) {
-      if (profileValue && profileValue !== 'null' && profileValue !== null) {
+    // Show extracted value if it exists
+    if (extractedValue && extractedValue !== 'Not extracted' && extractedValue !== 'null' && extractedValue !== null && extractedValue !== '') {
+      if (profileValue && profileValue !== 'null' && profileValue !== null && profileValue !== '') {
         // Both values exist - compare them
         const cleanExtracted = String(extractedValue).replace(/\s+/g, '');
         const cleanProfile = String(profileValue).replace(/\s+/g, '');
         
         if (cleanExtracted === cleanProfile) {
-          return `✅ Matched: ${extractedValue}`;
+          return `✅ ${extractedValue}`;
         } else {
-          return `❌ Mismatch: ${extractedValue} ≠ ${profileValue}`;
+          return `❌ ${extractedValue} ≠ ${profileValue}`;
         }
       } else {
         // Only extracted value exists
-        return `✅ Extracted: ${extractedValue}`;
+        return `✅ ${extractedValue}`;
       }
     } else {
-      // No extracted value
-      return `${type} extraction pending`;
+      // Show profile value when no extraction
+      if (profileValue && profileValue !== 'null' && profileValue !== null && profileValue !== '') {
+        return `📋 ${profileValue}`;
+      }
+      return `No ${type.toLowerCase()} data`;
     }
   };
 
@@ -49,13 +49,21 @@ const KYCApprovals = () => {
     return similarity >= 0.8 ? 'matched' : 'mismatched';
   };
 
-  const getNameMatchDisplay = (similarity) => {
-    if (!similarity) return 'Name verification pending';
-    const percentage = (similarity * 100).toFixed(1);
-    if (similarity >= 0.8) {
-      return `✅ Matched (${percentage}%)`;
+  const getNameMatchDisplay = (similarity, extractedName, profileName) => {
+    if (extractedName && extractedName !== 'Not extracted' && extractedName !== 'null' && extractedName !== null && extractedName !== '') {
+      if (similarity && similarity >= 0.8) {
+        return `✅ ${extractedName}`;
+      } else if (similarity) {
+        return `❌ ${extractedName}`;
+      } else {
+        return `✅ ${extractedName}`;
+      }
     } else {
-      return `❌ Mismatched (${percentage}%)`;
+      // Show profile name when no extraction
+      if (profileName && profileName !== 'null' && profileName !== null && profileName !== '') {
+        return `📋 ${profileName}`;
+      }
+      return 'No name data';
     }
   };
 
@@ -65,13 +73,15 @@ const KYCApprovals = () => {
   };
 
   const getFaceMatchDisplay = (similarity) => {
-    if (!similarity) return 'Face verification pending';
-    const percentage = (similarity * 100).toFixed(1);
-    if (similarity >= 0.7) {
-      return `✅ Verified (${percentage}%)`;
-    } else {
-      return `❌ Failed (${percentage}%)`;
+    if (similarity && similarity > 0) {
+      const percentage = (similarity * 100).toFixed(1);
+      if (similarity >= 0.7) {
+        return `✅ Verified (${percentage}%)`;
+      } else {
+        return `❌ Failed (${percentage}%)`;
+      }
     }
+    return 'No face data';
   };
 
   const toggleDetails = (appId) => {
@@ -233,6 +243,13 @@ const KYCApprovals = () => {
                 <div className="kyc-details">
                   <p><strong>Email:</strong> {application.email}</p>
                   <p><strong>Submitted:</strong> {new Date(application.submittedDate).toLocaleDateString()}</p>
+                  {application.status === 'verified' && (
+                    <>
+                      <p><strong>Profile Aadhaar:</strong> {application.profile_aadhaar || 'Not provided'}</p>
+                      <p><strong>Profile PAN:</strong> {application.profile_pan || 'Not provided'}</p>
+                      <p><strong>Extracted Name:</strong> {application.extracted_name || 'Not extracted'}</p>
+                    </>
+                  )}
                   <p><strong>Documents:</strong> {application.document_type}</p>
                 </div>
                 <div className="ai-feedback-section">
@@ -267,10 +284,7 @@ const KYCApprovals = () => {
                     <div className="match-item">
                       <span className="match-label">👤 Name Match:</span>
                       <span className={`match-status ${getNameMatchStatus(application.name_similarity)}`}>
-                        {application.extracted_name && application.extracted_name !== 'Not extracted' ? 
-                          `✅ Extracted: ${application.extracted_name}` :
-                          'Name extraction pending'
-                        }
+                        {getNameMatchDisplay(application.name_similarity, application.extracted_name, application.userName)}
                       </span>
                     </div>
                     
@@ -375,10 +389,16 @@ const KYCApprovals = () => {
                 {showDocuments[application.id] && (
                   <div className="documents-section">
                     <h4>📄 Uploaded Documents</h4>
+                    {application.status === 'verified' && (
+                      <div className="user-account-info">
+                        <h5>✅ Account Created Successfully</h5>
+                        <p><strong>Status:</strong> KYC Verified & Account Active</p>
+                      </div>
+                    )}
                     <div className="documents-grid">
                       {application.documents?.aadhaar && (
                         <div className="document-item">
-                          <span className="doc-type">🆔 PAN Card</span>
+                          <span className="doc-type">🆔 Aadhaar/PAN Card</span>
                           <a href={`http://localhost:5000/uploads/${application.documents.aadhaar}`} target="_blank" rel="noopener noreferrer" className="view-doc-link">
                             View Document
                           </a>
@@ -402,7 +422,7 @@ const KYCApprovals = () => {
                       )}
                     </div>
                   </div>
-                )}
+                )}}
               </div>
             ))
           );

@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import Notification from '../Notification';
 
-const TransactionHistory = () => {
+const TransactionHistory = ({ kycCompleted, showKycRequired, onNavigateToKyc }) => {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [notification, setNotification] = useState(null);
 
   useEffect(() => {
     fetchTransactions();
@@ -27,6 +29,30 @@ const TransactionHistory = () => {
     }
   };
 
+  if (!kycCompleted) {
+    return (
+      <div className="history-page">
+        {notification && (
+          <Notification 
+            type={notification.type}
+            message={notification.message}
+            onClose={() => setNotification(null)}
+          />
+        )}
+        <div className="kyc-required">
+          <div className="requirement-card">
+            <div className="requirement-icon">🔒</div>
+            <h3>KYC Verification Required</h3>
+            <p>Please complete KYC verification to access transaction history.</p>
+            <button onClick={() => onNavigateToKyc && onNavigateToKyc()} className="complete-profile-btn">
+              Complete KYC Now
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="history-page">
@@ -38,6 +64,13 @@ const TransactionHistory = () => {
 
   return (
     <div className="history-page">
+      {notification && (
+        <Notification 
+          type={notification.type}
+          message={notification.message}
+          onClose={() => setNotification(null)}
+        />
+      )}
       <h2>Transaction History</h2>
       
       <div className="history-filters">
@@ -78,7 +111,9 @@ const TransactionHistory = () => {
           <span>Date</span>
           <span>Type</span>
           <span>Description</span>
+          <span>Before Balance</span>
           <span>Amount</span>
+          <span>After Balance</span>
           <span>Status</span>
         </div>
         
@@ -95,9 +130,11 @@ const TransactionHistory = () => {
               <span>{new Date(transaction.created_at).toLocaleDateString()}</span>
               <span className="transaction-type">{transaction.transaction_type}</span>
               <span>{transaction.description}</span>
-              <span className={`transaction-amount ${transaction.transaction_type === 'deposit' ? 'credit' : 'debit'}`}>
-                {transaction.transaction_type === 'deposit' ? '+' : '-'}₹{parseFloat(transaction.amount).toFixed(2)}
+              <span className="balance-before">₹{parseFloat(transaction.before_balance || 0).toFixed(2)}</span>
+              <span className={`transaction-amount ${transaction.transaction_type === 'deposit' || transaction.transaction_type === 'credit' ? 'credit' : 'debit'}`}>
+                {transaction.transaction_type === 'deposit' || transaction.transaction_type === 'credit' ? '+' : '-'}₹{parseFloat(transaction.amount).toFixed(2)}
               </span>
+              <span className="balance-after">₹{parseFloat(transaction.balance_after || 0).toFixed(2)}</span>
               <span className={`transaction-status ${transaction.status || 'completed'}`}>
                 {(transaction.status || 'completed').toUpperCase()}
                 {transaction.error_code && ` (${transaction.error_code})`}

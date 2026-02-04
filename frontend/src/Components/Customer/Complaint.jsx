@@ -1,163 +1,148 @@
 import React, { useState } from 'react';
+import './css/complaint.css';
 
 const Complaint = () => {
-  const [complaintData, setComplaintData] = useState({
-    category: 'transaction',
+  const [formData, setFormData] = useState({
     transactionId: '',
-    transactionDate: '',
-    amount: '',
-    receiverAccount: '',
-    issueType: '',
-    description: '',
-    priority: 'high'
+    issue: ''
   });
   const [aiResponse, setAiResponse] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleInputChange = (e) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value
+    });
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsSubmitting(true);
+
     try {
       const userId = localStorage.getItem('user_id');
-      const response = await fetch('http://localhost:5000/api/complaints', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...complaintData, user_id: userId })
-      });
+      console.log('Submitting complaint:', { transactionId: formData.transactionId, issue: formData.issue, user_id: userId });
       
-      if (response.ok) {
-        const result = await response.json();
-        setAiResponse(result.ai_response);
-        setComplaintData({ 
-          category: 'transaction', transactionId: '', transactionDate: '', 
-          amount: '', receiverAccount: '', issueType: '', description: '', priority: 'high' 
+      const response = await fetch('http://localhost:5000/api/complaint', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...formData,
+          user_id: userId
+        }),
+      });
+
+      const data = await response.json();
+      console.log('Complaint response:', data);
+      
+      if (data.success) {
+        // Show success notification with complaint details
+        setAiResponse({
+          status: data.status,
+          message: data.tracking_message,
+          complaint_id: data.complaint_id,
+          transaction_id: data.transaction_id,
+          amount: data.amount,
+          tracking_url: data.tracking_url,
+          show_tracking_button: data.show_tracking_button
         });
+        setFormData({
+          transactionId: '',
+          issue: ''
+        });
+        setError(null);
+      } else {
+        setError(data.message || 'Failed to submit complaint');
       }
     } catch (error) {
-      alert('Error submitting complaint');
+      console.error('Error submitting complaint:', error);
+      setError('Network error. Please check your connection.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
     <div className="complaint-container">
-      <h2>🚨 Raise Transaction Complaint</h2>
-      <div className="complaint-info">
-        <p>💡 Our AI system will automatically find your transaction and provide instant resolution for most issues. You don't need the transaction ID - just provide the details you remember!</p>
-      </div>
+      <h2>🎯 Raise a Complaint</h2>
       
-      <form onSubmit={handleSubmit} className="complaint-form">
-        <div className="form-row">
-          <div className="form-group">
-            <label>Transaction ID *</label>
-            <input 
-              type="text"
-              value={complaintData.transactionId}
-              onChange={(e) => setComplaintData({...complaintData, transactionId: e.target.value})}
-              placeholder="e.g., TXN123456"
-              required
-            />
-            <small>Enter the transaction ID from your transaction history</small>
-          </div>
-          
-          <div className="form-group">
-            <label>Transaction Date *</label>
-            <input 
-              type="date"
-              value={complaintData.transactionDate}
-              onChange={(e) => setComplaintData({...complaintData, transactionDate: e.target.value})}
-              required
-            />
-          </div>
-        </div>
+      <div className="complaint-info">
+        <p>📞 Our AI agents will process your complaint and provide instant assistance. For urgent matters, we offer 24/7 automated resolution.</p>
+      </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label>Amount (₹) *</label>
-            <input 
-              type="number"
-              value={complaintData.amount}
-              onChange={(e) => setComplaintData({...complaintData, amount: e.target.value})}
-              placeholder="500"
-              required
-            />
-          </div>
-          
-          <div className="form-group">
-            <label>Receiver Account/UPI ID *</label>
-            <input 
-              type="text"
-              value={complaintData.receiverAccount}
-              onChange={(e) => setComplaintData({...complaintData, receiverAccount: e.target.value})}
-              placeholder="9876543210 or user@paytm"
-              required
-            />
-          </div>
+      {error && (
+        <div className="error-message">
+          <p>❌ {error}</p>
         </div>
-        
-        <div className="form-group">
-          <label>Issue Type *</label>
-          <select 
-            value={complaintData.issueType}
-            onChange={(e) => setComplaintData({...complaintData, issueType: e.target.value})}
-            required
-          >
-            <option value="">Select Issue Type</option>
-            <option value="money_debited_not_credited">Money debited but not credited to receiver</option>
-            <option value="transaction_failed">Transaction failed but money deducted</option>
-            <option value="duplicate_transaction">Duplicate/multiple transactions</option>
-            <option value="wrong_amount">Wrong amount debited</option>
-            <option value="unauthorized_transaction">Unauthorized/fraud transaction</option>
-            <option value="refund_not_received">Refund not received</option>
-            <option value="other">Other transaction issue</option>
-          </select>
-        </div>
-        
+      )}
 
-        
+      <form className="complaint-form" onSubmit={handleSubmit}>
         <div className="form-group">
-          <label>Detailed Description *</label>
-          <textarea 
-            value={complaintData.description}
-            onChange={(e) => setComplaintData({...complaintData, description: e.target.value})}
-            placeholder="Please provide detailed information about what happened. Include any error messages you received."
-            rows="4"
+          <label>Transaction ID *</label>
+          <input
+            type="text"
+            name="transactionId"
+            value={formData.transactionId}
+            onChange={handleInputChange}
+            placeholder="Enter transaction ID"
             required
           />
-          <small>💡 Priority will be automatically determined by our AI based on issue type and amount</small>
         </div>
-        
+
+        <div className="form-group">
+          <label>Issue Description *</label>
+          <textarea
+            name="issue"
+            value={formData.issue}
+            onChange={handleInputChange}
+            placeholder="Describe your issue"
+            rows="5"
+            required
+          />
+        </div>
+
         <div className="complaint-actions">
-          <button type="submit" className="submit-btn">
-            🤖 Submit for AI Analysis
+          <button type="submit" className="submit-btn" disabled={isSubmitting}>
+            {isSubmitting ? '🔄 Processing...' : '📤 Submit Complaint'}
           </button>
         </div>
       </form>
-      
+
       {aiResponse && (
         <div className="ai-response">
-          <h3>🤖 AI Processing Update</h3>
+          <h3>✅ Complaint Submitted Successfully</h3>
           <div className="response-card">
             <p><strong>Complaint ID:</strong> {aiResponse.complaint_id}</p>
+            <p><strong>Transaction ID:</strong> {aiResponse.transaction_id}</p>
+            <p><strong>Amount:</strong> ₹{aiResponse.amount}</p>
             <p><strong>Status:</strong> {aiResponse.status}</p>
-            <p><strong>Estimated Resolution:</strong> {aiResponse.estimated_resolution}</p>
-            <div className="next-steps">
-              <h4>Next Steps:</h4>
-              <ul>
-                {aiResponse.next_steps.map((step, index) => (
-                  <li key={index}>⏳ {step}</li>
-                ))}
-              </ul>
-            </div>
-            <p className="update-note">💬 You'll receive SMS/email updates on your complaint progress</p>
+            <p><strong>Message:</strong> {aiResponse.message}</p>
+            
+            {aiResponse.show_tracking_button && (
+              <div className="tracking-section">
+                <button 
+                  className="track-btn"
+                  onClick={() => window.location.href = `/complaints/${aiResponse.complaint_id}/track`}
+                >
+                  🔍 Track Complaint
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
-      
+
       <div className="complaint-help">
-        <h3>🔍 How our AI helps:</h3>
+        <h3>💡 Common Transaction Issues</h3>
         <ul>
-          <li>✅ Instant transaction verification</li>
-          <li>✅ Automatic refund processing for eligible cases</li>
-          <li>✅ Real-time fraud detection</li>
-          <li>✅ Smart escalation to human agents when needed</li>
+          <li>🔄 Failed Transactions - Payment debited but not credited to recipient</li>
+          <li>⏰ Delayed Transactions - Transaction takes longer than expected to reflect</li>
+          <li>💰 Double Deductions - Amount debited twice for the same payment</li>
+          <li>🤖 AI will analyze your complaint and provide instant resolution</li>
         </ul>
       </div>
     </div>

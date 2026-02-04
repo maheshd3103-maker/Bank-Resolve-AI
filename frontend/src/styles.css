@@ -1391,6 +1391,72 @@ input:focus, select:focus, textarea:focus {
   line-height: 1.4;
   word-wrap: break-word;
   overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.message-content .account-info,
+.message-content .transaction-list {
+  margin: 0.5rem 0;
+  padding: 0.75rem;
+  background: rgba(0, 85, 150, 0.05);
+  border-radius: 8px;
+  border-left: 3px solid var(--light-blue);
+}
+
+.message-content .account-detail,
+.message-content .transaction-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(0, 85, 150, 0.1);
+  font-size: 0.85rem;
+}
+
+.message-content .account-detail:last-child,
+.message-content .transaction-item:last-child {
+  border-bottom: none;
+}
+
+.message-content .detail-label {
+  font-weight: 600;
+  color: var(--primary-blue);
+  min-width: 40%;
+}
+
+.message-content .detail-value {
+  font-family: 'Courier New', monospace;
+  color: var(--text-primary);
+  text-align: right;
+  word-break: break-all;
+}
+
+.message-content .amount {
+  font-weight: 700;
+  color: var(--success-green);
+}
+
+.message-content .status {
+  padding: 0.2rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.message-content .status.completed {
+  background: #D1FAE5;
+  color: #065F46;
+}
+
+.message-content .status.pending {
+  background: #FEF3C7;
+  color: #92400E;
+}
+
+.message-content .status.failed {
+  background: #FEE2E2;
+  color: #991B1B;
 }
 
 .message.bot .message-content {
@@ -1560,6 +1626,30 @@ input[type="search"] {
     padding: 0.5rem;
     font-size: 0.75rem;
     border-radius: 8px;
+  }
+  
+  .message-content .account-detail,
+  .message-content .transaction-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+    padding: 0.4rem 0;
+  }
+  
+  .message-content .detail-label {
+    min-width: auto;
+    font-size: 0.7rem;
+  }
+  
+  .message-content .detail-value {
+    text-align: left;
+    font-size: 0.7rem;
+  }
+  
+  .message-content .account-info,
+  .message-content .transaction-list {
+    padding: 0.5rem;
+    margin: 0.25rem 0;
   }
   
   .chat-input {
@@ -4962,128 +5052,174 @@ textarea:focus {
 
 /* Complaint Form */
 .complaint-container {
-  max-width: 900px;
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 20px;
+  background: #f8f9fa;
+  min-height: 100vh;
+  width: 98%;
 }
 
 .complaint-container h2 {
-  color: var(--primary-blue);
-  font-size: 2rem;
-  margin-bottom: 1rem;
+  color: #dc3545;
   text-align: center;
+  margin-bottom: 20px;
+  font-size: 28px;
 }
 
 .complaint-info {
-  background: linear-gradient(135deg, #E3F2FD 0%, #BBDEFB 100%);
-  padding: 1rem;
-  border-radius: var(--border-radius);
-  margin-bottom: 2rem;
-  border-left: 4px solid var(--light-blue);
+  background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+  padding: 15px;
+  border-radius: 10px;
+  margin-bottom: 25px;
+  border-left: 4px solid #2196f3;
 }
 
 .complaint-info p {
   margin: 0;
-  color: var(--primary-blue);
+  color: #1565c0;
   font-weight: 500;
-  text-align: center;
 }
 
 .complaint-form {
   background: white;
-  padding: 2rem;
-  border-radius: var(--border-radius-large);
-  box-shadow: var(--shadow-light);
-  border: 1px solid var(--light-gray-bg);
-  margin-bottom: 2rem;
+  padding: 30px;
+  border-radius: 15px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+  margin-bottom: 25px;
 }
 
 .form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1.5rem;
-  margin-bottom: 1.5rem;
+  gap: 20px;
+  margin-bottom: 20px;
 }
 
-.complaint-form .form-group {
-  margin-bottom: 1.5rem;
+.form-group {
+  margin-bottom: 20px;
 }
 
-.complaint-form label {
+.form-group label {
   display: block;
+  margin-bottom: 8px;
   font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 0.5rem;
-  font-size: 0.9rem;
+  color: #333;
+  font-size: 14px;
 }
 
-.complaint-form small {
-  display: block;
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-  margin-top: 0.25rem;
-  font-style: italic;
-}
-
-.complaint-form input,
-.complaint-form select,
-.complaint-form textarea {
+.form-group input,
+.form-group select,
+.form-group textarea {
   width: 100%;
-  padding: 0.75rem;
-  border: 2px solid var(--input-border);
-  border-radius: var(--border-radius);
-  font-size: 1rem;
-  transition: border-color 0.2s ease;
+  padding: 12px 15px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: all 0.3s ease;
+  box-sizing: border-box;
 }
 
-.complaint-form input:focus,
-.complaint-form select:focus,
-.complaint-form textarea:focus {
-  border-color: var(--light-blue);
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(0, 85, 150, 0.1);
+  border-color: #2196f3;
+  box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
 }
 
-.complaint-form textarea {
-  resize: vertical;
-  min-height: 100px;
+.form-group small {
+  display: block;
+  margin-top: 5px;
+  color: #666;
+  font-size: 12px;
 }
 
 .complaint-actions {
   text-align: center;
-  margin-top: 2rem;
+  margin-top: 30px;
 }
 
 .submit-btn {
-  background: linear-gradient(135deg, var(--light-blue) 0%, var(--primary-blue) 100%);
+  background: linear-gradient(135deg, #4caf50, #45a049);
   color: white;
-  padding: 1rem 2.5rem;
+  padding: 15px 40px;
   border: none;
-  border-radius: var(--border-radius);
+  border-radius: 25px;
+  font-size: 16px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s ease;
-  font-size: 1.1rem;
-  box-shadow: 0 4px 12px rgba(0, 85, 150, 0.2);
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
 }
 
 .submit-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 85, 150, 0.3);
+  box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4);
+}
+
+.ai-response {
+  background: white;
+  padding: 25px;
+  border-radius: 15px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+  margin-bottom: 25px;
+  border-left: 4px solid #4caf50;
+}
+
+.ai-response h3 {
+  color: #4caf50;
+  margin-bottom: 15px;
+}
+
+.response-card {
+  background: #f1f8e9;
+  padding: 20px;
+  border-radius: 10px;
+}
+
+.response-card p {
+  margin: 10px 0;
+  color: #333;
+}
+
+.next-steps {
+  margin: 15px 0;
+}
+
+.next-steps h4 {
+  color: #2e7d32;
+  margin-bottom: 10px;
+}
+
+.next-steps ul {
+  list-style: none;
+  padding: 0;
+}
+
+.next-steps li {
+  padding: 8px 0;
+  color: #555;
+}
+
+.update-note {
+  background: #e8f5e8;
+  padding: 10px;
+  border-radius: 5px;
+  margin-top: 15px;
+  font-style: italic;
 }
 
 .complaint-help {
   background: white;
-  padding: 2rem;
-  border-radius: var(--border-radius-large);
-  box-shadow: var(--shadow-light);
-  border: 1px solid var(--light-gray-bg);
+  padding: 25px;
+  border-radius: 15px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.1);
 }
 
 .complaint-help h3 {
-  color: var(--primary-blue);
-  font-size: 1.2rem;
-  margin-bottom: 1rem;
+  color: #2196f3;
+  margin-bottom: 15px;
 }
 
 .complaint-help ul {
@@ -5092,23 +5228,22 @@ textarea:focus {
 }
 
 .complaint-help li {
-  padding: 0.5rem 0;
-  color: var(--text-secondary);
+  padding: 8px 0;
+  color: #555;
   font-weight: 500;
 }
 
 @media (max-width: 768px) {
   .form-row {
     grid-template-columns: 1fr;
-    gap: 1rem;
   }
   
   .complaint-container {
-    padding: 1rem;
+    padding: 15px;
   }
   
   .complaint-form {
-    padding: 1.5rem;
+    padding: 20px;
   }
 }
 
