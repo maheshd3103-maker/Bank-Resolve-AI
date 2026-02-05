@@ -1,0 +1,105 @@
+.kyc-container {
+  min-height: calc(100vh - 72px);
+  background: linear-gradient(135deg, #f8fafc 0%, #e0f2fe 50%, #f0fdfa 100%);
+  padding: 40px 32px;
+}
+
+.kyc-content {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.kyc-status-card {
+  margin-top: 32px;
+}
+
+.status-display {
+  text-align: center;
+  padding: 48px 32px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.status-icon-verified {
+  color: var(--success);
+}
+
+.status-icon-pending {
+  color: var(--warning);
+}
+
+.status-icon-rejected {
+  color: var(--error);
+}
+
+.status-icon-default {
+  color: var(--text-secondary);
+}
+
+.status-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 16px 0 8px;
+}
+
+.status-message {
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+
+.account-info-section {
+  padding: 32px;
+}
+
+.account-info-section h3 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 20px;
+  color: var(--text-primary);
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.info-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.info-value {
+  font-size: 15px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.file-input {
+  padding: 12px;
+  border: 2px dashed var(--border-color);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.file-input:hover {
+  border-color: var(--primary-color);
+}
+
+@media (max-width: 640px) {
+  .kyc-container {
+    padding: 20px 16px;
+  }
+
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
