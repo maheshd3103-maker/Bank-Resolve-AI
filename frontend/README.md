@@ -1,71 +1,70 @@
-# AutoResolve Banking - Modern Frontend
+# Getting Started with Create React App
 
-A modern, AI-powered banking application frontend built with React.
-
-## Features
-
-- 🎨 Modern, clean UI design
-- 🔐 Secure authentication system
-- 💳 Real-time transaction management
-- 💸 Instant money transfers
-- 📊 Interactive expense tracking with charts
-- 🤖 AI-powered chatbot assistant (RAG + LangGraph)
-- 📝 Intelligent complaint management system
-- ✅ Automated KYC verification
-- 📱 Fully responsive design
-
-## Tech Stack
-
-- React 18
-- React Router v6
-- Axios for API calls
-- Recharts for data visualization
-- Lucide React for icons
-- Custom CSS with CSS Variables
-
-## Installation
-
-1. Install dependencies:
-```bash
-npm install
-```
-
-2. Start the development server:
-```bash
-npm start
-```
-
-The app will open at [http://localhost:3000](http://localhost:3000)
+This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
 ## Available Scripts
 
-- `npm start` - Runs the app in development mode
-- `npm build` - Builds the app for production
-- `npm test` - Runs the test suite
+In the project directory, you can run:
 
-## Backend Integration
+### `npm start`
 
-The frontend connects to the Flask backend running on `http://localhost:5000`
+Runs the app in the development mode.\
+Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
 
-Ensure the backend is running before starting the frontend.
+The page will reload when you make changes.\
+You may also see any lint errors in the console.
 
-## Design Highlights
+### `npm test`
 
-- **Modern Dashboard**: Clean card-based layout with account overview
-- **Transaction Management**: Real-time transaction history with filtering
-- **Money Transfer**: Secure transfers with account validation
-- **AI Assistant**: RAG-powered chatbot for instant support
-- **Complaint System**: Automated complaint resolution with AI
-- **KYC Verification**: Document upload with AI-powered verification
+Launches the test runner in the interactive watch mode.\
+See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
 
-## Browser Support
+### `npm run build`
 
-- Chrome (latest)
-- Firefox (latest)
-- Safari (latest)
-- Edge (latest)
+Builds the app for production to the `build` folder.\
+It correctly bundles React in production mode and optimizes the build for the best performance.
 
-## License
+The build is minified and the filenames include the hashes.\
+Your app is ready to be deployed!
 
-MIT
+See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
 
+### `npm run eject`
+
+**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+
+If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+
+Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+
+You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+
+## Learn More
+
+You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+
+To learn React, check out the [React documentation](https://reactjs.org/).
+
+### Code Splitting
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+
+### Analyzing the Bundle Size
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+
+### Making a Progressive Web App
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+
+### Advanced Configuration
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+
+### Deployment
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+
+### `npm run build` fails to minify
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
