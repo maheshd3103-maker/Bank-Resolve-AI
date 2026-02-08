@@ -8,6 +8,7 @@ import AIAssistant from './AIAssistant';
 import Profile from './Profile';
 import Complaint from './Complaint';
 import ComplaintTracking from './ComplaintTracking';
+import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 const Dashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
@@ -22,6 +23,9 @@ const Dashboard = () => {
     name: localStorage.getItem('user_name') || 'User', 
     balance: '$25,847.32' 
   });
+  const [transactions, setTransactions] = useState([]);
+  const [chartData, setChartData] = useState([]);
+  const [categoryData, setCategoryData] = useState([]);
   
   const navigateToKyc = () => {
     setActiveTab('kyc');
@@ -29,7 +33,62 @@ const Dashboard = () => {
   
   useEffect(() => {
     checkUserStatus();
+    fetchTransactionsForCharts();
   }, []);
+
+  const fetchTransactionsForCharts = async () => {
+    try {
+      const userId = localStorage.getItem('user_id');
+      if (!userId) return;
+      
+      const response = await fetch(`http://localhost:5000/api/transactions/${userId}`);
+      const data = await response.json();
+      
+      if (data.success && data.transactions) {
+        setTransactions(data.transactions);
+        
+        // Prepare data for balance trend chart (last 7 days)
+        const last7Days = [];
+        const today = new Date();
+        for (let i = 6; i >= 0; i--) {
+          const date = new Date(today);
+          date.setDate(date.getDate() - i);
+          const dateStr = date.toISOString().split('T')[0];
+          
+          const dayTransactions = data.transactions.filter(t => {
+            const txnDate = new Date(t.created_at).toISOString().split('T')[0];
+            return txnDate === dateStr;
+          });
+          
+          let balance = parseFloat(data.transactions[0]?.balance_after || 0);
+          if (dayTransactions.length > 0) {
+            balance = parseFloat(dayTransactions[dayTransactions.length - 1].balance_after || 0);
+          }
+          
+          last7Days.push({
+            date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            balance: balance,
+            transactions: dayTransactions.length
+          });
+        }
+        setChartData(last7Days);
+        
+        // Prepare category data
+        const categories = {};
+        data.transactions.forEach(txn => {
+          const type = txn.transaction_type || 'other';
+          if (!categories[type]) {
+            categories[type] = { name: type, value: 0, count: 0 };
+          }
+          categories[type].value += Math.abs(parseFloat(txn.amount || 0));
+          categories[type].count += 1;
+        });
+        setCategoryData(Object.values(categories));
+      }
+    } catch (error) {
+      console.error('Error fetching transactions for charts:', error);
+    }
+  };
   
   const checkUserStatus = async () => {
     try {
@@ -140,6 +199,84 @@ const Dashboard = () => {
               🚀 Start Your Banking Journey
             </div>
           </div>
+
+          {/* Financial Overview Charts */}
+          {accountInfo && transactions.length > 0 && (
+            <div className="charts-section" style={{ marginTop: '30px', padding: '20px', background: '#f8f9fa', borderRadius: '10px' }}>
+              <h3 style={{ marginBottom: '20px', color: '#2c3e50' }}>📊 Financial Overview</h3>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '20px', marginBottom: '20px' }}>
+                {/* Balance Trend Chart */}
+                <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                  <h4 style={{ marginBottom: '15px', color: '#34495e' }}>Balance Trend (Last 7 Days)</h4>
+                  <ResponsiveContainer width="100%" height={250}>
+                    <AreaChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="date" />
+                      <YAxis />
+                      <Tooltip formatter={(value) => `₹${value.toLocaleString('en-IN')}`} />
+                      <Area type="monotone" dataKey="balance" stroke="#3498db" fill="#3498db" fillOpacity={0.6} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Transaction Categories Pie Chart */}
+                <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                  <h4 style={{ marginBottom: '15px', color: '#34495e' }}>Transaction Categories</h4>
+                  <ResponsiveContainer width="100%" height={250}>
+                    <PieChart>
+                      <Pie
+                        data={categoryData}
+                        cx="50%"
+                        cy="50%"
+                        labelLine={false}
+                        label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                        outerRadius={80}
+                        fill="#8884d8"
+                        dataKey="value"
+                      >
+                        {categoryData.map((entry, index) => {
+                          const COLORS = ['#3498db', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6', '#1abc9c'];
+                          return <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />;
+                        })}
+                      </Pie>
+                      <Tooltip formatter={(value) => `₹${value.toLocaleString('en-IN')}`} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '20px' }}>
+                {/* Transaction Volume Chart */}
+                <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                  <h4 style={{ marginBottom: '15px', color: '#34495e' }}>Transaction Volume (Last 7 Days)</h4>
+                  <ResponsiveContainer width="100%" height={250}>
+                    <BarChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="date" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="transactions" fill="#2ecc71" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Spending by Category */}
+                <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                  <h4 style={{ marginBottom: '15px', color: '#34495e' }}>Spending by Category</h4>
+                  <ResponsiveContainer width="100%" height={250}>
+                    <BarChart data={categoryData} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" />
+                      <YAxis dataKey="name" type="category" width={100} />
+                      <Tooltip formatter={(value) => `₹${value.toLocaleString('en-IN')}`} />
+                      <Bar dataKey="value" fill="#e74c3c" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          )}
           
           {showJourneyFlow && (
             <div className="journey-flow">

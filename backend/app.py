@@ -1516,6 +1516,319 @@ def get_manual_review_transactions():
     finally:
         conn.close()
 
+@app.route('/api/manager/customers', methods=['GET'])
+def get_customers_count():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        cursor.execute('SELECT COUNT(*) as total_count FROM users WHERE role IN ("customer", "verified_customer")')
+        result = cursor.fetchone()
+        
+        return jsonify({
+            'success': True,
+            'total_count': result['total_count'] if result else 0
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/manager/kyc-documents/<int:kyc_id>', methods=['GET'])
+def get_kyc_documents_by_id(kyc_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Get KYC record
+        cursor.execute('SELECT * FROM kyc_verification WHERE id = %s', (kyc_id,))
+        kyc_record = cursor.fetchone()
+        
+        if not kyc_record:
+            return jsonify({'success': False, 'error': 'KYC record not found'})
+        
+        # Get documents
+        cursor.execute(
+            'SELECT document_type, file_name, file_path, uploaded_at FROM documents WHERE kyc_id = %s ORDER BY uploaded_at DESC',
+            (kyc_id,)
+        )
+        documents = cursor.fetchall()
+        
+        # Format document URLs
+        for doc in documents:
+            if doc['file_path']:
+                doc['file_url'] = f'http://localhost:5000/uploads/{os.path.basename(doc["file_path"])}'
+        
+        return jsonify({
+            'success': True,
+            'kyc_id': kyc_id,
+            'status': kyc_record['verification_status'],
+            'documents': documents
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/manager/refund', methods=['POST'])
+def process_refund():
+    data = request.json
+    complaint_id = data.get('complaint_id')
+    
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Get complaint and transaction details
+        cursor.execute(
+            '''SELECT c.user_id, c.transaction_id, t.amount 
+               FROM complaints c 
+               LEFT JOIN transactions t ON c.transaction_id = t.transaction_id 
+               WHERE c.complaint_id = %s''',
+            (complaint_id,)
+        )
+        complaint_data = cursor.fetchone()
+        
+        if not complaint_data or not complaint_data['transaction_id']:
+            return jsonify({'success': False, 'message': 'Complaint or transaction not found'})
+        
+        amount = float(complaint_data['amount'])
+        user_id = complaint_data['user_id']
+        transaction_id = complaint_data['transaction_id']
+        
+        # Credit back the amount
+        cursor.execute('UPDATE accounts SET balance = balance + %s WHERE user_id = %s', 
+                      (amount, user_id))
+        
+        # Get current balance before refund
+        cursor.execute('SELECT balance FROM accounts WHERE user_id = %s', (user_id,))
+        current_balance_data = cursor.fetchone()
+        current_balance = float(current_balance_data['balance']) if current_balance_data else 0.0
+        new_balance_after_refund = current_balance
+        
+        # Create refund transaction
+        import random
+        refund_txn_id = f"REF{int(time.time())}{random.randint(100, 999)}"
+        
+        cursor.execute(
+            '''INSERT INTO transactions (account_id, transaction_type, amount, before_balance, balance_after,
+               transaction_id, description, status, created_at) VALUES 
+               ((SELECT id FROM accounts WHERE user_id = %s), 'refund', %s, %s, %s, %s, %s, 'completed', NOW())''',
+            (user_id, amount, current_balance - amount, new_balance_after_refund, refund_txn_id, f'Refund for complaint {complaint_id}')
+        )
+        
+        # Update complaint status
+        cursor.execute(
+            '''UPDATE complaints SET status = 'resolved', resolution_notes = %s, 
+               refund_transaction_id = %s, resolved_at = NOW() WHERE complaint_id = %s''',
+            (f'Refund processed. Amount ₹{amount} credited back.', refund_txn_id, complaint_id)
+        )
+        
+        conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Refund of ₹{amount} processed successfully.',
+            'refund_transaction_id': refund_txn_id
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+    finally:
+        conn.close()
+
+@app.route('/api/extract-document', methods=['POST'])
+def extract_document():
+    """Extract data from uploaded document using OCR"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'})
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'})
+        
+        # Save file temporarily
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
+        unique_filename = f"extract_{timestamp}{filename}"
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        file.save(file_path)
+        
+        extracted_data = {}
+        
+        try:
+            import easyocr
+            import fitz  # PyMuPDF
+            
+            reader = easyocr.Reader(['en'])
+            ocr_text = ""
+            
+            # Handle PDF files
+            if file_path.lower().endswith('.pdf'):
+                doc = fitz.open(file_path)
+                for page in doc:
+                    pix = page.get_pixmap()
+                    img_data = pix.tobytes("ppm")
+                    result = reader.readtext(img_data)
+                    ocr_text += " ".join([text[1] for text in result]) + "\n"
+                doc.close()
+            else:
+                # Handle image files
+                result = reader.readtext(file_path)
+                ocr_text = " ".join([text[1] for text in result])
+            
+            # Use AI to extract structured data
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+                model = genai.GenerativeModel('gemini-pro')
+                
+                prompt = f"""
+                Extract the following information from this OCR text:
+                
+                OCR Text: {ocr_text}
+                
+                Please extract and return ONLY:
+                1. Aadhaar Number (12 digits)
+                2. PAN Number (format: ABCDE1234F)
+                3. Full Name
+                
+                Return in this exact JSON format:
+                {{
+                    "aadhaar": "123456789012",
+                    "pan": "ABCDE1234F",
+                    "name": "FULL NAME"
+                }}
+                
+                If any field is not found, use null. Only return the JSON, no other text.
+                """
+                
+                ai_result = model.generate_content(prompt).text.strip()
+                
+                # Parse AI response
+                import json
+                try:
+                    ai_data = json.loads(ai_result)
+                    extracted_data = {
+                        'aadhaar': ai_data.get('aadhaar'),
+                        'pan': ai_data.get('pan'),
+                        'name': ai_data.get('name')
+                    }
+                except json.JSONDecodeError:
+                    # Fallback regex extraction
+                    import re
+                    aadhaar_pattern = r'\b\d{4}\s*\d{4}\s*\d{4}\b'
+                    pan_pattern = r'\b[A-Z]{5}\d{4}[A-Z]\b'
+                    
+                    aadhaar_match = re.search(aadhaar_pattern, ocr_text)
+                    pan_match = re.search(pan_pattern, ocr_text.upper())
+                    
+                    extracted_data = {
+                        'aadhaar': re.sub(r'\D', '', aadhaar_match.group()) if aadhaar_match else None,
+                        'pan': pan_match.group() if pan_match else None,
+                        'name': None
+                    }
+            except Exception as e:
+                print(f"AI extraction failed: {e}")
+                # Fallback regex extraction
+                import re
+                aadhaar_pattern = r'\b\d{4}\s*\d{4}\s*\d{4}\b'
+                pan_pattern = r'\b[A-Z]{5}\d{4}[A-Z]\b'
+                
+                aadhaar_match = re.search(aadhaar_pattern, ocr_text)
+                pan_match = re.search(pan_pattern, ocr_text.upper())
+                
+                extracted_data = {
+                    'aadhaar': re.sub(r'\D', '', aadhaar_match.group()) if aadhaar_match else None,
+                    'pan': pan_match.group() if pan_match else None,
+                    'name': None
+                }
+            
+            # Clean up temp file
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            
+            return jsonify({
+                'success': True,
+                'extracted_data': extracted_data,
+                'ocr_text': ocr_text[:500]  # Return first 500 chars for preview
+            })
+            
+        except Exception as e:
+            # Clean up temp file
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return jsonify({'success': False, 'error': f'OCR extraction failed: {str(e)}'})
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/create-account', methods=['POST'])
+def create_account():
+    """Create bank account for user after profile completion"""
+    data = request.json
+    user_id = data.get('user_id')
+    
+    if not user_id:
+        return jsonify({'success': False, 'error': 'User ID required'})
+    
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    try:
+        # Check if account already exists
+        cursor.execute('SELECT id FROM accounts WHERE user_id = %s', (user_id,))
+        existing_account = cursor.fetchone()
+        
+        if existing_account:
+            return jsonify({
+                'success': True,
+                'message': 'Account already exists',
+                'account_id': existing_account['id']
+            })
+        
+        # Check if profile is complete
+        cursor.execute('SELECT * FROM profiles WHERE user_id = %s', (user_id,))
+        profile = cursor.fetchone()
+        
+        if not profile:
+            return jsonify({'success': False, 'error': 'Profile not found. Please complete your profile first.'})
+        
+        # Generate account number
+        import random
+        account_number = f"{random.randint(1000000000, 9999999999)}"
+        ifsc_code = "BANK0001234"
+        branch_name = "Main Branch"
+        
+        # Create account
+        cursor.execute(
+            '''INSERT INTO accounts (user_id, account_number, account_type, balance, ifsc_code, branch_name, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, NOW())''',
+            (user_id, account_number, 'Savings', 0.0, ifsc_code, branch_name)
+        )
+        
+        account_id = cursor.lastrowid
+        
+        # Update user role
+        cursor.execute('UPDATE users SET role = %s WHERE id = %s', ('verified_customer', user_id))
+        
+        conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Account created successfully',
+            'account_number': account_number,
+            'ifsc_code': ifsc_code,
+            'branch_name': branch_name,
+            'account_id': account_id
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        conn.close()
+
 @app.route('/api/manager/complaints/<complaint_id>/resolve', methods=['POST'])
 def resolve_complaint_manual():
     data = request.json

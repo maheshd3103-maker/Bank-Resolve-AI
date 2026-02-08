@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './ComplianceReports.css';
+import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 const ComplianceReports = () => {
   const [reportType, setReportType] = useState('complaints');
@@ -227,66 +228,78 @@ const ComplianceReports = () => {
           </div>
         ) : reportType === 'analysis' ? (
           <div className="analysis-dashboard">
-            <div className="analytics-grid">
-              <div className="chart-card">
-                <h3>Complaint Resolution</h3>
-                <div className="pie-chart">
-                  <div className="chart-legend">
-                    <div className="legend-item">
-                      <span className="legend-color ai"></span>
-                      <span>AI Resolved ({analytics.totalComplaints > 0 ? Math.round((analytics.aiResolved / analytics.totalComplaints) * 100) : 0}%)</span>
-                    </div>
-                    <div className="legend-item">
-                      <span className="legend-color manual"></span>
-                      <span>Manual Review ({analytics.totalComplaints > 0 ? Math.round((analytics.manualReview / analytics.totalComplaints) * 100) : 0}%)</span>
-                    </div>
-                  </div>
-                  <div className="pie-visual">
-                    <div className="pie-slice ai" style={{transform: 'rotate(0deg)'}}></div>
-                    <div className="pie-slice manual" style={{transform: `rotate(${analytics.totalComplaints > 0 ? (analytics.aiResolved / analytics.totalComplaints) * 360 : 0}deg)`}}></div>
-                  </div>
-                </div>
+            <div className="analytics-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '20px' }}>
+              {/* Complaint Resolution Pie Chart */}
+              <div className="chart-card" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                <h3 style={{ marginBottom: '15px', color: '#34495e' }}>Complaint Resolution</h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={[
+                        { name: 'AI Resolved', value: analytics.aiResolved, color: '#2ecc71' },
+                        { name: 'Manual Review', value: analytics.manualReview, color: '#f39c12' },
+                        { name: 'Processing', value: analytics.totalComplaints - analytics.aiResolved - analytics.manualReview, color: '#3498db' }
+                      ]}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                      outerRadius={100}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {[
+                        { name: 'AI Resolved', value: analytics.aiResolved, color: '#2ecc71' },
+                        { name: 'Manual Review', value: analytics.manualReview, color: '#f39c12' },
+                        { name: 'Processing', value: analytics.totalComplaints - analytics.aiResolved - analytics.manualReview, color: '#3498db' }
+                      ].map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
               </div>
               
-              <div className="chart-card">
-                <h3>Error Code Distribution</h3>
-                <div className="bar-chart">
-                  {Object.entries(analytics.errorCodes)
+              {/* Error Code Distribution */}
+              <div className="chart-card" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                <h3 style={{ marginBottom: '15px', color: '#34495e' }}>Error Code Distribution</h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart 
+                    data={Object.entries(analytics.errorCodes)
                     .sort(([,a], [,b]) => b - a)
-                    .slice(0, 4)
-                    .map(([code, count], index) => {
-                      const maxCount = Math.max(...Object.values(analytics.errorCodes));
-                      const height = maxCount > 0 ? (count / maxCount) * 100 : 0;
-                      const percentage = analytics.totalComplaints > 0 ? Math.round((count / analytics.totalComplaints) * 100) : 0;
-                      return (
-                        <div key={code} className="bar" style={{height: `${height}%`}}>
-                          <span className="bar-label">{code}</span>
-                          <span className="bar-value">{percentage}%</span>
-                        </div>
-                      );
-                    })
-                  }
-                </div>
+                      .slice(0, 8)
+                      .map(([code, count]) => ({ code, count }))}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="code" />
+                    <YAxis />
+                    <Tooltip />
+                    <Bar dataKey="count" fill="#e74c3c" />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
               
-              <div className="stats-card">
-                <h3>Quick Stats</h3>
-                <div className="stats-grid">
-                  <div className="stat-item">
-                    <span className="stat-number">{analytics.totalComplaints}</span>
-                    <span className="stat-label">Total Complaints</span>
+              {/* Quick Stats */}
+              <div className="stats-card" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+                <h3 style={{ marginBottom: '15px', color: '#34495e' }}>Quick Stats</h3>
+                <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '15px' }}>
+                  <div className="stat-item" style={{ textAlign: 'center', padding: '15px', background: '#ecf0f1', borderRadius: '8px' }}>
+                    <span className="stat-number" style={{ display: 'block', fontSize: '24px', fontWeight: 'bold', color: '#2c3e50' }}>{analytics.totalComplaints}</span>
+                    <span className="stat-label" style={{ display: 'block', fontSize: '12px', color: '#7f8c8d', marginTop: '5px' }}>Total Complaints</span>
                   </div>
-                  <div className="stat-item">
-                    <span className="stat-number">{analytics.aiResolved}</span>
-                    <span className="stat-label">AI Resolved</span>
+                  <div className="stat-item" style={{ textAlign: 'center', padding: '15px', background: '#ecf0f1', borderRadius: '8px' }}>
+                    <span className="stat-number" style={{ display: 'block', fontSize: '24px', fontWeight: 'bold', color: '#2c3e50' }}>{analytics.aiResolved}</span>
+                    <span className="stat-label" style={{ display: 'block', fontSize: '12px', color: '#7f8c8d', marginTop: '5px' }}>AI Resolved</span>
                   </div>
-                  <div className="stat-item">
-                    <span className="stat-number">{analytics.manualReview}</span>
-                    <span className="stat-label">Manual Review</span>
+                  <div className="stat-item" style={{ textAlign: 'center', padding: '15px', background: '#ecf0f1', borderRadius: '8px' }}>
+                    <span className="stat-number" style={{ display: 'block', fontSize: '24px', fontWeight: 'bold', color: '#2c3e50' }}>{analytics.manualReview}</span>
+                    <span className="stat-label" style={{ display: 'block', fontSize: '12px', color: '#7f8c8d', marginTop: '5px' }}>Manual Review</span>
                   </div>
-                  <div className="stat-item">
-                    <span className="stat-number">{analytics.totalComplaints - analytics.aiResolved - analytics.manualReview}</span>
-                    <span className="stat-label">Processing</span>
+                  <div className="stat-item" style={{ textAlign: 'center', padding: '15px', background: '#ecf0f1', borderRadius: '8px' }}>
+                    <span className="stat-number" style={{ display: 'block', fontSize: '24px', fontWeight: 'bold', color: '#2c3e50' }}>{analytics.totalComplaints - analytics.aiResolved - analytics.manualReview}</span>
+                    <span className="stat-label" style={{ display: 'block', fontSize: '12px', color: '#7f8c8d', marginTop: '5px' }}>Processing</span>
                   </div>
                 </div>
               </div>
